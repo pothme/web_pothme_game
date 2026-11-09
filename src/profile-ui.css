@@ -1,0 +1,18 @@
+.stock-profile-fields { margin: 14px 0; border-block: 1px solid #86a3b23d; padding: 10px 0; }
+.stock-profile-fields summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-size: 12px; color: #c8dce5; min-height: 28px; }
+.stock-profile-fields summary::before { content: '+'; font-size: 16px; color: #9dd7c4; }
+.stock-profile-fields[open] summary::before { content: '−'; }
+.stock-profile-fields summary span { color: #8ea8b6; font-size: 10px; }
+.stock-profile-fields p { margin: 4px 0 12px; font-size: 11px; line-height: 1.65; color: #a6bdc8; }
+.stock-profile-fields label { display: block; margin: 8px 0 5px; font-size: 11px; }
+.stock-profile-fields input,.stock-profile-fields select { box-sizing: border-box; width: 100%; min-height: 40px; padding: 9px 10px; border: 1px solid #65879799; border-radius: 5px; background: #0d2433; color: #e3eef3; font: inherit; font-size: 13px; }
+.stock-profile-fields input::placeholder { color: #849ea9; }
+.stock-profile-fields :is(input,select):focus-visible { outline: 2px solid #b2e7d5; outline-offset: 2px; }
+.stock-profile-price { display: grid; grid-template-columns: minmax(0,1fr) 94px; gap: 8px; }
+body:not(.mobile-layout) #admission { max-height:calc(100% - 100px); overflow-y:auto; overscroll-behavior:contain; }
+body:not(.mobile-layout) .stock-profile-fields { border-color:#53778650; }
+body:not(.mobile-layout) .stock-profile-fields summary { color:#274b5a; }
+body:not(.mobile-layout) .stock-profile-fields summary::before { color:#29796e; }
+body:not(.mobile-layout) .stock-profile-fields summary span { color:#58727e; }
+body:not(.mobile-layout) .stock-profile-fields p { color:#526e7a; }
+body.mobile-layout .stock-profile-fields :is(input,select) { font-size: 16px; min-height: 44px; }

@@ -1,0 +1,8 @@
+.market-slot-selector{padding-top:15px;margin-top:14px;border-top:1px solid #355064}
+.market-slot-selector h3{margin:0 0 9px;color:#c8e0e5;font-size:11px;font-weight:500}
+.market-slot-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.market-slot-buttons button{min-width:0;min-height:35px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 9px;border:1px solid #46667a;border-radius:4px;background:#193448;color:#a8c6d4;text-align:left;font:10px/1.4 'Noto Sans KR',Arial,sans-serif;cursor:pointer}
+.market-slot-buttons button:hover{background:#294d60;color:#e0f1f2}
+.market-slot-buttons button[aria-pressed=true]{border-color:#83c7b8;background:#2c5658;color:#d3fff1;font-weight:600}
+.market-slot-buttons button:focus-visible{outline:2px solid #b0e5d6;outline-offset:2px}
+@media(max-width:1000px),(pointer:coarse){.market-slot-buttons button{min-height:40px;font-size:11px}}

@@ -1,0 +1,52 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { AdminAuth, initialAdmin } from '../server/admin';
+type Message = Record<string, any>;
+const origin = 'http://podeumgo.test', password = 'podeumgo-local-fixture-admin-2026-only';
+test('admin rejects oversized chunked bodies and rechecks secret rotation after a pending control body', async () => {
+  let security = initialAdmin(), secret: string | undefined = password, mutations = 0;
+  const auth = new AdminAuth(() => security, (next) => { security = next; }, () => secret);
+  const state = () => Response.json({ ok: true });
+  const control = async () => { mutations++; return state(); };
+  const request = (path: string, body: BodyInit, headers: Record<string, string> = {}) => new Request(`${origin}/api/admin/${path}`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', ...headers }, body, duplex: 'half' } as RequestInit);
+  let cancelled = false;
+  const huge = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array(3000)); }, cancel() { cancelled = true; } }, { highWaterMark: 0 });
+  assert.equal((await auth.route(request('login', huge), control, state)).status, 400);
+  assert.equal(cancelled, true);
+  const logged = await auth.route(request('login', JSON.stringify({ password })), control, state);
+  const cookie = logged.headers.get('set-cookie')!.split(';')[0]!, csrf = (await logged.json() as Message).csrfToken;
+  let markReading!: () => void, finishBody!: () => void;
+  const reading = new Promise<void>((resolve) => { markReading = resolve; });
+  const release = new Promise<void>((resolve) => { finishBody = resolve; });
+  const slow = new ReadableStream<Uint8Array>({ async pull(controller) { markReading(); await release; controller.enqueue(new TextEncoder().encode('{"action":"close"}')); controller.close(); } }, { highWaterMark: 0 });
+  const pending = auth.route(request('control', slow, { Cookie: cookie, 'X-CSRF-Token': csrf }), control, state);
+  await reading;
+  secret = 'rotated-admin-secret-at-least-24-characters';
+  finishBody();
+  assert.equal((await pending).status, 401); assert.equal(mutations, 0);
+  const session = new Request(`${origin}/api/admin/session`, { headers: { Cookie: cookie } });
+  assert.equal((await auth.route(session, control, state).then((response) => response.json()) as Message).authenticated, false);
+  secret = undefined;
+  assert.equal((await auth.route(session, control, state).then((response) => response.json()) as Message).authenticated, false);
+});
+
+test('management bodies are bounded and authorization is rechecked after delayed management preparation', async () => {
+ let security = initialAdmin(), secret: string | undefined = password, mutations = 0;
+ const auth = new AdminAuth(() => security, next => { security = next; }, () => secret);
+ const state = () => Response.json({ ok: true }), control = async () => state();
+ const request = (body: BodyInit, cookie = '', csrf = '', path = 'manage') => new Request(`${origin}/api/admin/${path}`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: cookie, 'X-CSRF-Token': csrf }, body, duplex: 'half' } as RequestInit);
+ const login = await auth.route(request(JSON.stringify({ password }), '', '', 'login'), control, state);
+ const cookie = login.headers.get('set-cookie')!.split(';')[0]!, csrf = (await login.json() as Message).csrfToken;
+ let cancelled = false;
+ const huge = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array(5000)); }, cancel() { cancelled = true; } }, { highWaterMark: 0 });
+ assert.equal((await auth.route(request(huge, cookie, csrf), control, state, async () => { mutations++; return state(); })).status, 400); assert.equal(cancelled, true); assert.equal(mutations, 0);
+ let markPrepared!: () => void, release!: () => void;
+ const prepared = new Promise<void>(resolve => { markPrepared = resolve; }), wait = new Promise<void>(resolve => { release = resolve; });
+ const pending = auth.route(request('{"action":"charts"}', cookie, csrf), control, state, async (_input, reauthorize) => {
+  markPrepared(); await wait;
+  if (!await reauthorize()) return Response.json({ ok: false }, { status: 401 });
+  mutations++; return state();
+ });
+ await prepared; secret = undefined; release();
+ assert.equal((await pending).status, 401); assert.equal(mutations, 0);
+});

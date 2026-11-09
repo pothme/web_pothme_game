@@ -1,0 +1,33 @@
+.market-tape{display:flex;align-items:stretch;flex:0 0 44px;height:44px;min-height:44px;min-width:0;overflow:hidden;background:#3179ed;border-block:1px solid #598af0;color:#e0edfc}
+.market-tape-details{display:flex;align-items:center;justify-content:center;gap:5px;flex:0 0 88px;min-width:0;margin:0;padding:4px 6px;border:0;border-right:1px solid #598af0;border-radius:0;background:#245fc4;color:#fff;cursor:pointer}
+.market-tape-details strong{font:600 10px/1.35 'Noto Sans KR',sans-serif;white-space:nowrap}
+.market-tape-details>span{font-size:11px;color:#d5e5ff}
+.market-tape-details:hover{background:#2c6edb}
+.market-tape-details:focus-visible{outline:2px solid #b3d9ff;outline-offset:-3px}
+.market-tape-viewport{position:relative;flex:1;min-width:0;height:42px;overflow:hidden}
+.market-tape-frame{display:block;width:100%;height:42px;border:0;background:#3179ed}
+.market-tape-status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:5px;padding:3px 5px;background:#245fc4;color:#e7f0ff;font-size:10px;line-height:1.4;white-space:nowrap}
+.market-tape-status button{flex:none;border:0;border-bottom:1px solid #9cc5ef;background:none;color:#e5f2ff;font:inherit;padding:2px 0;cursor:pointer}
+.market-tape-status button:focus-visible{outline:2px solid #b3d9ff;outline-offset:3px}
+.market-tape-info{width:min(480px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);max-height:calc(var(--mobile-viewport-height,100vh) - 24px);padding:0;overflow:hidden;border:1px solid #527491;border-radius:9px;background:#102b44;color:#dceaf7;font-family:'Noto Sans KR',sans-serif;box-shadow:0 15px 60px #03142380;color-scheme:dark}
+.market-tape-info[open]{display:flex;flex-direction:column}
+.market-tape-info::backdrop{background:#041a2bb8;backdrop-filter:blur(3px)}
+.market-tape-info-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;padding:12px 14px;border-bottom:1px solid #345879}
+.market-tape-info-header h2{margin:0;font-size:16px;font-weight:600}
+.market-tape-info-header button{flex:none;min-height:34px;padding:6px 9px;border:1px solid #6084a3;border-radius:5px;background:#244e71;color:#e0ecf7;font:11px 'Noto Sans KR',sans-serif;cursor:pointer}
+.market-tape-info-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:4px 16px 16px;font-size:12px;line-height:1.8}
+.market-tape-info-body p{margin:12px 0;color:#b7cfe2}
+.market-tape-info-body .market-tape-info-scope{color:#e2effb;font-weight:500}
+.market-tape-pause{min-height:36px;padding:7px 11px;border:1px solid #7398b6;border-radius:5px;background:#244e71;color:#e4f0fa;font:11px 'Noto Sans KR',sans-serif;cursor:pointer}
+.market-tape-info-body ol{margin:15px 0;padding-left:27px}
+.market-tape-info-body li{padding:4px 0;border-bottom:1px solid #2b4c69}
+.market-tape-info-body li small{display:block;color:#83aac9;font-size:10px;line-height:1.5}
+.market-tape-info-sources a{color:#acd9ff;text-decoration:underline;text-underline-offset:3px}
+.market-tape-info :focus-visible{outline:2px solid #aad5ff;outline-offset:3px}
+@media (max-width:1000px), (pointer:coarse){
+  .market-tape-details{flex-basis:76px;gap:3px;padding-inline:4px}
+  .market-tape-details strong{font-size:9px}
+  .market-tape-details>span{font-size:10px}
+  .market-tape-status{font-size:9px}
+  .market-tape-info{position:fixed;top:calc(var(--mobile-viewport-top,0px) + 12px);bottom:auto;left:0;right:0;margin:0 auto}
+}

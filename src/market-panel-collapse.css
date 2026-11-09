@@ -1,0 +1,9 @@
+#market-panel .market-panel-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid #52718180; }
+#market-panel .market-panel-toolbar > span { color:#b5cece; font-size:11px; letter-spacing:.04em; }
+#market-panel .market-panel-toolbar button { min-height:32px; padding:5px 10px; border:1px solid #71969980; border-radius:5px; background:#244453; color:#e2f6ed; font:inherit; font-size:11px; cursor:pointer; touch-action:manipulation; }
+#market-panel .market-panel-toolbar button:hover { background:#315969; }
+#market-panel .market-panel-toolbar button:focus-visible { outline:2px solid #b1e9d4; outline-offset:3px; }
+#market-panel.is-minimized { height:auto; overflow:visible; padding-block:10px; }
+#market-panel.is-minimized > :not(.market-panel-toolbar) { display:none !important; }
+#market-panel.is-minimized .market-panel-toolbar { margin:0; padding:0; border:0; }
+body.mobile-layout #market-panel .market-panel-toolbar button { min-height:40px; }

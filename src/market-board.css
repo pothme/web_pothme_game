@@ -1,0 +1,49 @@
+.market-board{display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;background:#0c1823;color:#dceaf2;font-family:'Noto Sans KR',Arial,sans-serif;color-scheme:dark}
+.market-board *{box-sizing:border-box}.market-board [hidden]{display:none!important}
+.market-board-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:0 0 30px;padding:0 10px;background:#142a3b;border-bottom:1px solid #3a5468;font-size:10px}
+.market-board-toolbar strong{font-weight:500;white-space:nowrap}.market-board-toolbar>span{font-size:9px;color:#93b1c6}
+.market-board-toolbar button{border:1px solid #587f95;border-radius:4px;padding:3px 8px;background:#24495d;color:#d9f3ef;font:inherit;cursor:pointer}
+.market-board-tabs{display:flex;gap:3px;margin-left:auto}.market-board-tabs button{min-width:25px;min-height:24px;padding:2px 7px}.market-board-tabs button[aria-pressed=true]{background:#527f76;color:#e4fff4}.market-board-toolbar>span{margin-left:auto}
+.market-board-navigation{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;min-height:44px;padding:5px 7px;border-bottom:1px solid #4b7189;background:#1c3c53}
+.market-board-navigation button{flex:none;min-height:34px;padding:6px 10px;border:1px solid #719bb1;border-radius:5px;background:#315c75;color:#edfafb;font:600 11px/1.2 'Noto Sans KR',Arial,sans-serif;cursor:pointer;touch-action:manipulation}
+.market-board-navigation button:disabled{opacity:.4;cursor:default}.market-board-navigation button:hover:not(:disabled){background:#416f88}
+.market-board-position{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c0ddeb;font-size:10px;text-align:center}
+.market-board-grid{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:minmax(0,1fr);flex:1;min-width:0;min-height:0;gap:3px;padding:3px;background:#284254;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scroll-padding-inline:3px;scrollbar-width:thin;scrollbar-color:#86adc3 #213b4d}
+.market-board-cell{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border:1px solid #3e596d;background:#0c1823;scroll-snap-align:start}
+.market-board-cell.is-active{border-color:#9accbb}.market-board-cell-heading{display:flex;flex:none;height:30px;align-items:stretch;background:#1b3446;border-bottom:1px solid #3d596b}
+.market-board-cell-heading button{min-width:0;border:0;background:none;color:#c9dfeb;font:500 11px 'Noto Sans KR',Arial,sans-serif;cursor:pointer}
+.market-board-select{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;padding:4px 9px}
+.market-board-select[aria-pressed=true]{color:#b4eed7}.market-board-expand{flex:0 0 36px;border-left:1px solid #3e596b!important;font-size:19px!important}
+.market-board button:focus-visible{outline:2px solid #b6e0f1;outline-offset:-3px}.market-board-cell-heading button:hover{background:#2d5064}
+.market-board-cell-host{flex:1;min-width:0;min-height:0}.market-board.is-focused .market-board-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden;scroll-snap-type:none}
+.market-board-note{flex:none;margin:0;padding:3px 8px;color:#8ea8bb;font-size:8px;line-height:1.5;background:#0b1721;text-align:center}
+.market-tab-name{display:none}
+.market-chart-embedded .market-chart-heading,.market-chart-embedded .market-chart-data-note{display:none}
+/* Nested scroll/overflow clips make Chromium omit iframe content at oblique
+   CSS3D angles. The wall uses fixed cells and the WebGL aperture clips its
+   perimeter; keep only the normal 2D chart/modal's scrolling and clipping. */
+.office-wall-chart :is(.market-board,.market-board-grid,.market-board-cell,.market-chart,.market-chart-viewport){overflow:visible!important}
+.market-chart-embedded .market-chart-footer{min-height:22px;padding:2px 8px;justify-content:flex-end;font-size:8px}
+.market-chart-embedded .market-chart-message{padding:10px;gap:6px}.market-chart-embedded .market-chart-message strong{font-size:10px}.market-chart-embedded .market-chart-message>span{font-size:9px}.market-chart-embedded .market-chart-message.is-error{inset:auto 5px 5px;padding:7px}
+/* The flat mobile view shows one full-width feed with named tabs. The room wall
+   keeps the original four panels. Avoid duplicate controls eating the plot. */
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-toolbar{min-height:48px;flex-basis:48px;padding:2px 4px;gap:4px}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-toolbar>:is(strong,span,button){display:none}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-tabs{flex:1;min-width:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-tabs button{min-width:0;width:100%;min-height:44px;padding:3px 2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;touch-action:manipulation}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-tab-number{display:none}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-tab-name{display:inline}
+/* Keep eight choices on one swipeable row instead of taking candle height. */
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-tabs{display:flex;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scroll-snap-type:x proximity}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-tabs button{flex:0 0 calc((100% - 9px)/4);scroll-snap-align:start}
+.market-board-rear>.market-board-toolbar{justify-content:center;letter-spacing:2px;color:#a6d7cd}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-grid{display:block;padding:3px;overflow:hidden}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-cell{height:100%;width:100%}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-board-cell:not(.is-active){display:none}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) :is(.market-board-navigation,.market-board-cell-heading){display:none}
+body.mobile-layout :is(#mobile-chart-host,#large-chart-host) .market-chart-footer button{min-height:32px;padding:3px 8px}
+body.mobile-layout.mobile-short-viewport :is(#mobile-chart-host,#large-chart-host) .market-board-note{display:none}
+/* Short screens reserve height for candles; the full room wall keeps both tapes. */
+body.mobile-layout.mobile-short-viewport :is(#mobile-chart-host,#large-chart-host) .market-board>.market-tape{display:none}
+.world-tools #free-view[aria-pressed=true]{background:#416b69;color:#d6f5e9;border-color:#8bbab0}
+@media(min-width:1101px){.move-hint .hint-text{display:none}}

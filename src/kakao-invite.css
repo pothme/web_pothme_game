@@ -1,0 +1,50 @@
+.topbar.has-kakao-invite{gap:14px}
+.kakao-invite-trigger{display:inline-flex;flex:none;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:8px 12px;border:1px solid #fee500;border-radius:22px;background:#fee500;color:#30251f;font-size:11px;font-weight:600;white-space:nowrap}
+.kakao-invite-trigger:hover{background:#fff178;border-color:#fff178}
+.kakao-invite-trigger svg{flex:none;width:21px;height:21px}
+.kakao-invite-label-short{display:none}
+.kakao-invite-dialog{width:min(420px,calc(100vw - 28px));max-width:calc(100vw - 28px);max-height:calc(100dvh - 28px);overflow:auto;padding:24px;border:1px solid #4f687a;border-radius:12px;background:#142b3e;color:#e0edf2;box-shadow:0 24px 80px #07152280;color-scheme:dark}
+.kakao-invite-dialog::backdrop{background:#071724b8;backdrop-filter:blur(4px)}
+.kakao-invite-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.kakao-invite-eyebrow{color:#c2b45a;font-size:9px;letter-spacing:1.5px}
+.kakao-invite-heading h2{margin:7px 0 0;font-size:20px;font-weight:600;letter-spacing:-.6px}
+.kakao-invite-close{flex:none;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid #516c80;border-radius:6px;background:#254359;color:#d5e7ed;font-size:25px;line-height:1}
+.kakao-invite-room{display:flex;align-items:center;gap:12px;margin-top:24px}
+.kakao-invite-room-icon{display:grid;place-items:center;flex:none;width:49px;height:49px;border-radius:14px;background:#fee500;color:#30251f}
+.kakao-invite-room-icon svg{width:31px;height:31px}
+.kakao-invite-room small{font-size:10px;color:#92b0c0}
+.kakao-invite-room h3{margin:4px 0 0;font-size:23px;font-weight:600;letter-spacing:-.6px}
+#kakao-invite-description{margin:18px 0 12px;color:#a7bfcb;font-size:12px;line-height:1.7}
+.kakao-invite-code{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 18px;padding:13px 16px;border:1px solid #4d625d;border-radius:7px;background:#243b42}
+.kakao-invite-code span{font-size:12px;color:#c3d5d7}
+.kakao-invite-code strong{color:#ffe95c;font-size:25px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:4px;user-select:all}
+.kakao-invite-enter{display:flex;align-items:center;justify-content:center;gap:10px;min-height:45px;padding:12px;border:1px solid #fee500;border-radius:7px;background:#fee500;color:#30251f;font-size:13px;font-weight:600;text-decoration:none}
+.kakao-invite-enter:hover{background:#fff178}
+.kakao-invite-enter span{font-size:18px;line-height:1}
+.kakao-invite-actions{display:flex;gap:8px;margin-top:9px}
+.kakao-invite-actions button{flex:1;min-height:42px;padding:10px 6px;border:1px solid #4e6c7f;border-radius:7px;background:#254459;color:#d2e7ee;font-size:12px}
+.kakao-invite-actions button:hover:not(:disabled){background:#33576c}
+.kakao-invite-manual{margin-top:16px}
+.kakao-invite-manual label{display:block;margin-bottom:7px;font-size:12px;color:#d1e1e6}
+.kakao-invite-manual textarea{display:block;width:100%;min-height:112px;padding:10px;border:1px solid #638294;border-radius:5px;background:#102638;color:#e2eef2;font:12px/1.7 'Noto Sans KR',sans-serif;resize:vertical;user-select:text;overflow-wrap:anywhere}
+.kakao-invite-manual p,.kakao-invite-status{color:#c4d9df;font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.kakao-invite-manual p{margin:7px 0 0}
+.kakao-invite-status{margin:12px 0 0}
+.kakao-invite-status:empty{display:none}
+.kakao-invite-dialog :focus-visible{outline:3px solid #ffe95c;outline-offset:3px}
+@media (max-width:1000px), (pointer:coarse){
+  .topbar.has-kakao-invite{gap:8px}
+  .kakao-invite-trigger{gap:4px;min-height:36px;padding:7px 9px;font-size:10px}
+  .kakao-invite-trigger svg{width:19px;height:19px}
+  .kakao-invite-label-full{display:none}.kakao-invite-label-short{display:inline}
+  .topbar.has-kakao-invite .brand{flex:none}
+  .topbar.has-kakao-invite .identity{flex:1;min-width:0}
+  .topbar.has-kakao-invite .identity>div{min-width:0}
+  .topbar.has-kakao-invite .identity small{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kakao-invite-dialog{padding:20px}
+}
+@media(max-width:350px){.topbar.has-kakao-invite{padding-left:10px;padding-right:10px;gap:5px}.kakao-invite-trigger{padding-left:7px;padding-right:7px}.kakao-invite-dialog{padding:17px}.kakao-invite-heading h2{font-size:18px}}
+
+body.mobile-layout .kakao-invite-trigger{min-height:30px;padding:4px 7px;font-size:10px;gap:3px}
+body.mobile-layout .kakao-invite-trigger svg{width:17px;height:17px}
+body.mobile-layout .topbar.has-kakao-invite{gap:6px}

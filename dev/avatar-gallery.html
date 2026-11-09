@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>포듬 캐릭터 · 실제 3D 미리보기</title>
+    <style>
+      :root { color-scheme: light; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color: #314b43; background: #f5f3eb; font-synthesis: none; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 300px; }
+      main { max-width: 1504px; margin: 0 auto; padding: 38px 38px 24px; }
+      .eyebrow { margin: 0 0 13px; display: flex; align-items: center; gap: 9px; font-size: 11px; letter-spacing: .18em; font-weight: 700; color: #7b8a75; }
+      .eyebrow svg { width: 25px; height: 25px; }
+      .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 27px; }
+      h1 { margin: 0; font-size: clamp(25px, 2.8vw, 38px); line-height: 1.35; letter-spacing: -.055em; font-weight: 750; }
+      .intro { margin: 10px 0 0; color: #78857b; font-size: 14px; line-height: 1.65; letter-spacing: -.025em; }
+      .status { flex-shrink: 0; margin-top: 6px; padding: 11px 14px; border: 1px solid #d9dfcf; border-radius: 12px; background: #ecefe4; color: #617057; font-size: 11px; line-height: 1.65; }
+      .status strong { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; }
+      .status strong::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #91a57c; }
+      .gallery { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 17px; }
+      .card { overflow: hidden; background: #fffdf6; border: 1px solid #e0e2d6; border-radius: 23px; box-shadow: 0 9px 22px #48503b05; }
+      .card-top { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 0; }
+      .number { color: #8e9d89; font-family: Georgia, serif; font-size: 25px; font-style: italic; line-height: 1; }
+      .species { padding: 5px 10px; border-radius: 30px; background: #edf1e7; color: #718265; font-size: 11px; font-weight: 600; }
+      .preview { height: clamp(330px, 31vw, 455px); margin: 5px 4px 0; }
+      .preview .avatar-model-preview { border-radius: 0 !important; background: radial-gradient(ellipse at 50% 42%, #fffef9 0%, #f4f4e9 74%) !important; }
+      .card-info { padding: 17px 22px 22px; border-top: 1px solid #eceee3; }
+      .card-info h2 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -.045em; }
+      .card-info p { margin: 7px 0 0; color: #8a9388; font-size: 11px; line-height: 1.7; letter-spacing: -.02em; }
+      .swatches { margin-top: 14px; display: flex; align-items: center; gap: 5px; }
+      .swatch { width: 13px; height: 13px; border-radius: 50%; box-shadow: inset 0 0 0 1px #00000008; }
+      .swatch-label { margin-left: 5px; font-size: 10px; color: #9aa192; letter-spacing: .03em; }
+      footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 21px; padding: 0 2px; color: #939c90; font-size: 11px; line-height: 1.8; }
+      footer p { margin: 0; }
+      @media (max-width: 1100px) { main { max-width: 900px; padding: 30px 26px; } .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; } .preview { height: 390px; } .heading { align-items: flex-start; } .status { max-width: 220px; } }
+      @media (max-width: 570px) { main { padding: 26px 18px 24px; } .heading { display: block; margin-bottom: 22px; } .intro { font-size: 12px; } .status { max-width: none; margin-top: 18px; font-size: 11px; } .gallery { grid-template-columns: 1fr; gap: 18px; } .preview { height: 390px; } .card-top { padding-top: 19px; } footer { display: block; } footer p + p { margin-top: 5px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow"><svg viewBox="0 0 28 28" fill="none" aria-hidden="true"><path d="M6 21C6 11 11 5 23 5c0 11-6 17-17 16Z" fill="#b3c49d"/><path d="m5 24 12-12" stroke="#718964" stroke-width="1.5" stroke-linecap="round"/></svg>PODEUM CHARACTER STUDIO</p>
+      <header class="heading">
+        <div>
+          <h1>포듬 캐릭터 · 실제 3D 미리보기</h1>
+          <p class="intro">둥글고 포근한, 우리 사무실의 작은 친구들.<br>캐릭터를 드래그해서 앞·옆·뒷모습을 살펴보세요.</p>
+        </div>
+        <aside class="status"><strong>의상 30종 · 액세서리 30종 추가</strong>실제 모델 · 공개 사이트 반영 완료</aside>
+      </header>
+      <section class="gallery" id="gallery" aria-label="캐릭터 4종 비교"></section>
+      <footer><p>사무실에서 사용하는 실제 3D 모델입니다. 이미지 시안이 아니에요.</p><p>마우스·손가락으로 돌려보기 · 키보드 ← →</p></footer>
+    </main>
+    <script type="module" src="./avatar-gallery.ts"></script>
+  </body>
+</html>

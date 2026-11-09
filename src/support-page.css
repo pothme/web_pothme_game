@@ -1,0 +1,63 @@
+body.support-page {
+  --ps-bg:#f4f7f7; --ps-card:#fff; --ps-text:#16333f; --ps-muted:#5e7881; --ps-line:#d8e3e5; --ps-accent:#227c6e; --ps-soft:#e5f0ed;
+  margin:0; min-width:280px; min-height:100dvh; overflow-x:hidden;
+  background:var(--ps-bg); color:var(--ps-text); font-family:'Noto Sans KR',sans-serif;
+}
+body.support-page[data-theme="dark"] { --ps-bg:#0c1d29; --ps-card:#132d3b; --ps-text:#e5f2f0; --ps-muted:#9bb7c0; --ps-line:#35505e; --ps-accent:#9edfc5; --ps-soft:#203e47; }
+.support-page *, .support-page *::before, .support-page *::after { box-sizing:border-box; }
+.support-page a { color:inherit; }
+.support-page [hidden] { display:none !important; }
+.support-page :is(a,button,select):focus-visible { outline:3px solid #5aada6; outline-offset:4px; }
+.ps-header { border-bottom:1px solid var(--ps-line); }
+.ps-header-inner { display:flex; align-items:center; gap:28px; max-width:1120px; margin:auto; padding:22px 32px; }
+.ps-brand { display:inline-flex; align-items:center; gap:12px; font-size:23px; font-weight:800; text-decoration:none; white-space:nowrap; }
+.ps-brand-mark { font:42px 'Gowun Batang',serif; color:var(--ps-accent); }
+.ps-brand small { display:block; margin-top:3px; font-size:8px; font-weight:500; letter-spacing:2px; color:var(--ps-muted); }
+.ps-header nav { display:flex; align-items:center; gap:22px; margin-left:auto; }
+.ps-header nav a { text-decoration:none; font-size:12px; font-weight:500; color:var(--ps-muted); }
+.ps-header nav a:hover,.ps-footer a:hover { color:var(--ps-accent); }
+.ps-theme select { min-height:36px; max-width:132px; border:1px solid var(--ps-line); border-radius:7px; padding:6px 9px; color:var(--ps-muted); background:var(--ps-card); font:inherit; font-size:11px; }
+.ps-main { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,440px); align-items:start; gap:74px; max-width:1040px; margin:64px auto 50px; padding:0 32px; }
+.ps-intro { padding-top:22px; }
+.ps-eyebrow { display:block; font-size:10px; font-weight:700; letter-spacing:2.5px; color:var(--ps-accent); }
+.ps-coffee { display:flex; align-items:center; justify-content:center; width:90px; height:90px; margin:30px 0 28px; border-radius:26px; background:#f7e4a8; color:#624c2b; transform:rotate(-6deg); }
+.ps-coffee svg { width:68px; height:68px; transform:rotate(6deg); }
+.ps-intro h1 { margin:0; font-size:clamp(36px,4vw,51px); line-height:1.35; font-weight:700; letter-spacing:-2px; }
+.ps-intro h1 em { font-style:normal; color:var(--ps-accent); }
+.ps-intro-copy { margin:25px 0 0; color:var(--ps-muted); font-size:14px; line-height:1.95; word-break:keep-all; }
+.ps-free-note { position:relative; margin:38px 0 0; padding:16px 18px 16px 40px; border-radius:10px; background:var(--ps-soft); color:var(--ps-muted); font-size:12px; line-height:1.8; word-break:keep-all; }
+.ps-free-note > span { position:absolute; top:16px; left:17px; color:var(--ps-accent); }
+.ps-card { min-width:0; padding:26px; background:var(--ps-card); border:1px solid var(--ps-line); border-radius:18px; box-shadow:0 12px 35px #062c3810; }
+.ps-card-heading { display:flex; align-items:center; gap:7px; color:var(--ps-muted); font-size:10px; letter-spacing:.04em; }
+.ps-card-dot { display:block; width:6px; height:6px; border-radius:50%; background:var(--ps-accent); }
+.ps-card h2 { margin:13px 0 22px; font-size:20px; line-height:1.5; letter-spacing:-.6px; word-break:keep-all; }
+.ps-load-status { padding:24px 10px; text-align:center; color:var(--ps-muted); }
+.ps-load-status p { font-size:13px; line-height:1.8; }
+.ps-load-status button { min-height:42px; padding:8px 16px; border:1px solid var(--ps-line); border-radius:8px; background:var(--ps-soft); color:var(--ps-text); font:inherit; font-size:13px; cursor:pointer; }
+.ps-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; max-width:1040px; margin:0 auto; padding:22px 32px 30px; color:var(--ps-muted); font-size:11px; }
+.ps-footer p { margin:0; }
+.ps-footer a { text-decoration:none; font-weight:600; }
+.ps-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+@media(max-width:800px) {
+  .ps-header-inner { gap:16px; padding:18px 22px; }
+  .ps-brand { font-size:20px; gap:9px; }.ps-brand-mark { font-size:35px; }.ps-brand small { font-size:6px; }
+  .ps-header nav { gap:15px; }.ps-header nav a { font-size:11px; }
+  .ps-main { gap:30px; margin-top:36px; padding:0 22px; grid-template-columns:minmax(0,1fr) minmax(0,380px); }
+  .ps-intro { padding-top:8px; }.ps-intro h1 { font-size:36px; }.ps-intro-copy { font-size:12px; }.ps-free-note { padding-left:32px; font-size:11px; }.ps-free-note > span { left:12px; }
+  .ps-card { padding:22px; }.ps-card h2 { font-size:18px; }
+}
+@media(max-width:720px) {
+  .ps-header-inner { flex-wrap:wrap; gap:12px; padding:15px 18px; }
+  .ps-brand { flex:1; }.ps-theme { order:2; }.ps-header nav { order:3; width:100%; margin:0; padding-top:9px; border-top:1px solid var(--ps-line); justify-content:space-between; }
+  .ps-theme select { max-width:118px; min-height:36px; }
+  .ps-main { display:block; margin:28px auto 0; padding:0 16px; max-width:460px; }
+  .ps-intro { position:relative; padding:0 0 24px; }
+  .ps-eyebrow { font-size:8px; letter-spacing:2px; }
+  .ps-coffee { position:absolute; top:0; right:5px; width:65px; height:65px; margin:0; border-radius:20px; }.ps-coffee svg { width:49px; height:49px; }
+  .ps-intro h1 { margin-top:14px; font-size:31px; line-height:1.35; letter-spacing:-1px; }
+  .ps-intro-copy { margin-top:15px; font-size:12px; }
+  .ps-free-note { margin-top:18px; padding-block:10px; }.ps-free-note > span { top:10px; }
+  .ps-card { padding:20px 16px; border-radius:14px; }.ps-card h2 { margin-bottom:16px; font-size:18px; }
+  .ps-footer { display:block; max-width:460px; padding:24px 20px calc(26px + env(safe-area-inset-bottom,0px)); text-align:center; line-height:1.8; }.ps-footer a { display:inline-block; margin-top:7px; }
+}
+@media(max-width:340px) { .ps-brand { font-size:18px; gap:6px; }.ps-brand-mark { font-size:30px; }.ps-brand small { letter-spacing:1px; }.ps-theme select { max-width:108px; font-size:10px; }.ps-main { padding:0 12px; }.ps-intro h1 { font-size:29px; }.ps-card { padding-inline:12px; } }

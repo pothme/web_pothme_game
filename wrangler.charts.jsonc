@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "podeumgo-charts",
+  "main": "server/korean-chart-worker.ts",
+  "compatibility_date": "2026-11-04",
+  "observability": {
+    "enabled": false
+  }
+}

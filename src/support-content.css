@@ -1,0 +1,22 @@
+.support-transfer{color:var(--ps-text,#e8f1f7);font-family:inherit}
+.support-transfer [hidden]{display:none!important}
+.support-device-switch{display:grid;grid-template-columns:1fr 1fr;gap:5px;background:var(--ps-soft,#0b1c28);padding:5px;border-radius:11px;margin:20px 0 16px}
+.support-device-switch button{border:0;border-radius:7px;background:transparent;color:var(--ps-muted,#b4c8d4);min-height:42px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;touch-action:manipulation}
+.support-device-switch button[aria-pressed="true"]{background:#fee500;color:#302817;box-shadow:0 2px 8px #0002}
+.support-transfer p{margin:12px 0;font-size:13px;line-height:1.8;color:var(--ps-muted,#b4c8d4)}
+.support-pc>p,.support-phone>p{text-align:center}
+.support-pc b{color:var(--ps-text,#e8f1f7);font-weight:600}
+.support-qr{margin:0 auto 18px;text-align:center}
+.support-qr img{display:block;width:min(248px,100%);height:auto;aspect-ratio:1;margin:0 auto;background:#fff;border:8px solid #fff;border-radius:8px;box-sizing:border-box;image-rendering:pixelated}
+.support-qr figcaption{font-size:11px;color:var(--ps-muted,#b4c8d4);margin-top:10px;line-height:1.7}
+.support-transfer .support-pay{display:block;text-align:center;padding:15px 10px;background:#fee500;color:#302817;font:inherit;font-size:13px;font-weight:700;text-decoration:none;border-radius:9px}
+.support-transfer .support-phone-help{font-size:11px;text-align:left;margin-top:14px}
+.support-copy-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:18px 0 12px}
+.support-copy-actions button{font:inherit;font-size:11px;color:var(--ps-text,#e8f1f7);background:transparent;border:1px solid var(--ps-line,#476172);padding:10px 6px;min-height:42px;border-radius:8px;cursor:pointer;touch-action:manipulation}
+.support-link-label{display:block;color:var(--ps-muted,#b4c8d4);font-size:10px}
+.support-link-value{box-sizing:border-box;width:100%;padding:10px 0;border:0;border-bottom:1px solid var(--ps-line,#3d5366);background:transparent;color:var(--ps-text,#e8f1f7);font:12px ui-monospace,monospace}
+.support-transfer .support-copy-status{min-height:0;margin:8px 0;color:var(--ps-text,#d4f5e9);font-size:11px}
+.support-transfer .support-copy-status:empty{display:none}
+.support-transfer .support-transfer-note{font-size:11px;line-height:1.8;margin:16px 0 0}
+.support-transfer :is(button,a,input):focus-visible{outline:3px solid #579eff;outline-offset:3px}
+@media(max-width:380px){.support-copy-actions{grid-template-columns:1fr}.support-qr img{width:min(224px,100%)}.support-device-switch button{font-size:11px}}
