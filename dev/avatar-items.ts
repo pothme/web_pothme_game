@@ -8,7 +8,9 @@ for(const slot of Object.keys(slots) as (keyof typeof slots)[]){
   for(const item of APPEARANCE_OPTIONS[slot]){
     if(item.id==='none')continue;
     const card=document.createElement('figure'),image=document.createElement('img'),caption=document.createElement('figcaption');
-    card.className='item';image.dataset.avatarSlot=slot;image.dataset.avatarValue=item.id;image.width=160;image.height=160;image.alt=item.label;caption.textContent=item.label;
+    // The caption names the item; an empty alt (as in the dressing room) keeps a
+    // waiting card a calm blank square instead of a broken-image glyph and a second label.
+    card.className='item';image.dataset.avatarSlot=slot;image.dataset.avatarValue=item.id;image.width=160;image.height=160;image.alt='';caption.textContent=item.label;
     card.append(image,caption);grid.append(card);
   }
   section.append(heading,grid);host.append(section);

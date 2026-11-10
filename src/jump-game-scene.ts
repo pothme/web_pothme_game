@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { createOfficeAvatar, replaceOfficeAvatarAppearance, type OfficeAvatar } from './office-avatar';
-import { createAvatarNameLabel } from './avatar-name-label';
+import { avatarLabelY, createAvatarNameLabel } from './avatar-name-label';
+import { poseAvatarLife } from './office-avatar-pose';
 import { isJumpPeerNearby, sampleJumpMotion, updateJumpMotion, type JumpMotionSample, type JumpMotionTrack } from './jump-peer-motion';
 import type { JumpPeerView, JumpChatMessage } from '../shared/jump-social';
 import './jump-peer-scene.css';
 import type { AvatarAppearance } from '../shared/avatar-appearance';
 import { appearanceKey } from '../shared/avatar-appearance';
-import { JUMP_COURSE, getJumpPlatformView, type JumpPlatform, type JumpState } from '../shared/jump-game';
+import { JUMP_COURSE, JUMP_RULES, getJumpPlatformView, type JumpPlatform, type JumpState } from '../shared/jump-game';
 import { fitJumpCamera, jumpCameraAnchors, jumpCameraFocus, jumpPlatformOccludes, nextJumpCameraFloor, JUMP_CAMERA_PITCH } from './jump-camera';
 import { createJumpEffects } from './jump-effects';
 
@@ -103,6 +104,8 @@ export function createJumpGameScene(host:HTMLElement,appearance:AvatarAppearance
   const peerActors=new Map<string,PeerActor>();
   const bubbles=new Map<string,{message:JumpChatMessage;element:HTMLDivElement}>();
   const bubblePoint=new THREE.Vector3();
+  /** Authoritative height of each figure, without the cosmetic walking hop. */
+  const standingY=new WeakMap<THREE.Object3D,number>();
   let selfId='',selfName='',selfLabel:THREE.Sprite|null=null,serverOffset=0;
   function disposeName(sprite:THREE.Sprite|null){if(!sprite)return;sprite.removeFromParent();sprite.material.map?.dispose();sprite.material.dispose();}
   function disposePeer(actor:PeerActor){if(actor.model){scene.remove(actor.model.group);actor.model.dispose();actor.model=null;}disposeName(actor.label);actor.label=null;}
@@ -112,7 +115,7 @@ export function createJumpGameScene(host:HTMLElement,appearance:AvatarAppearance
     for(const peer of peers.slice(0,50)){
       if(![peer.x,peer.y,peer.z,peer.vx,peer.vy,peer.vz,peer.floor,peer.updatedAt].every(Number.isFinite))continue;
       if(peer.id===selfId){
-        if(selfName!==peer.nickname){selfName=peer.nickname;disposeName(selfLabel);selfLabel=createAvatarNameLabel(selfName,true,null);avatar.group.add(selfLabel);}continue;
+        if(selfName!==peer.nickname){selfName=peer.nickname;disposeName(selfLabel);selfLabel=createAvatarNameLabel(selfName,true,null,avatarLabelY(avatar));avatar.group.add(selfLabel);}continue;
       }
       ids.add(peer.id);const actor=peerActors.get(peer.id);
       if(actor){actor.peer=peer;actor.track=updateJumpMotion(actor.track,peer);}
@@ -128,10 +131,16 @@ export function createJumpGameScene(host:HTMLElement,appearance:AvatarAppearance
     bubbles.set(message.playerId,{message,element});
   }
   function clearChats(){for(const bubble of bubbles.values())bubble.element.remove();bubbles.clear();}
-  function poseActor(model:OfficeAvatar,motion:Pick<JumpMotionSample,'vx'|'vz'|'grounded'>,dt:number,time:number){
+  function poseActor(model:OfficeAvatar,motion:Pick<JumpMotionSample,'vx'|'vy'|'vz'|'grounded'>,dt:number,time:number){
     const speed=Math.hypot(motion.vx,motion.vz),walking=motion.grounded&&speed>.1;
     if(speed>.15){const heading=Math.atan2(motion.vx,motion.vz);model.group.rotation.y+=Math.atan2(Math.sin(heading-model.group.rotation.y),Math.cos(heading-model.group.rotation.y))*Math.min(1,dt*15);}
-    const stride=Math.sin(time*.015);
+    // Same stride clock as the office walk, so the waddle and squash of
+    // poseAvatarLife land on the footsteps. The hop is cosmetic: physics,
+    // camera and the ground ring all keep using the authoritative height.
+    const stride=Math.sin(time*.016);
+    standingY.set(model.group,model.group.position.y);
+    if(walking)model.group.position.y+=Math.abs(stride)*.04;
+    poseAvatarLife(model,time,walking,motion.grounded?undefined:motion.vy/JUMP_RULES.jumpVelocity);
     model.arms.forEach((arm,index)=>{const side=index===0?-1:1;arm.rotation.set(motion.grounded?(walking?stride*side*.48:0):-.6,0,side*(motion.grounded?.12:.55));});
     model.forearms.forEach(arm=>arm.rotation.set(motion.grounded?0:-.2,0,0));
     model.legs.forEach((leg,index)=>leg.rotation.x=walking?stride*(index===0?-1:1)*.42:motion.grounded?0:-.16);
@@ -145,11 +154,12 @@ export function createJumpGameScene(host:HTMLElement,appearance:AvatarAppearance
       if(!isJumpPeerNearby(actor.peer,state)){disposePeer(actor);continue;}
       const key=appearanceKey(actor.peer.appearance)+':'+actor.peer.color;
       if((!actor.model||actor.appearanceId!==key)&&modelBudget>0){
-        modelBudget--;actor.model=actor.model?replaceOfficeAvatarAppearance(actor.model,actor.peer.color,actor.peer.appearance):createOfficeAvatar(actor.peer.color,actor.peer.appearance);actor.appearanceId=key;
+        modelBudget--;actor.model=actor.model?replaceOfficeAvatarAppearance(actor.model,actor.peer.color,actor.peer.appearance):createOfficeAvatar(actor.peer.color,actor.peer.appearance,actor.peer.id);actor.appearanceId=key;
         if(!actor.model.group.parent)scene.add(actor.model.group);
+        if(actor.label)actor.label.position.y=avatarLabelY(actor.model);
       }
       if(!actor.model)continue;
-      if(actor.labelName!==actor.peer.nickname||!actor.label){disposeName(actor.label);actor.label=createAvatarNameLabel(actor.peer.nickname,false,null);actor.labelName=actor.peer.nickname;actor.model.group.add(actor.label);}
+      if(actor.labelName!==actor.peer.nickname||!actor.label){disposeName(actor.label);actor.label=createAvatarNameLabel(actor.peer.nickname,false,null,avatarLabelY(actor.model));actor.labelName=actor.peer.nickname;actor.model.group.add(actor.label);}
       const motion=sampleJumpMotion(actor.track,now);actor.model.group.position.set(motion.x,motion.y,motion.z);
       poseActor(actor.model,now-actor.peer.updatedAt>1000?{...motion,vx:0,vz:0}:motion,dt,time);
     }
@@ -159,7 +169,8 @@ export function createJumpGameScene(host:HTMLElement,appearance:AvatarAppearance
       if(bubble.message.expiresAt<=now){bubble.element.remove();bubbles.delete(id);continue;}
       const actor=id===selfId?avatar:peerActors.get(id)?.model;
       if(!actor){bubble.element.hidden=true;continue;}
-      bubblePoint.copy(actor.group.position);bubblePoint.y+=2.62;bubblePoint.project(camera);
+      // Anchored to where the figure stands, so a bubble does not bob with each step.
+      bubblePoint.copy(actor.group.position);bubblePoint.y=(standingY.get(actor.group)??bubblePoint.y)+2.62;bubblePoint.project(camera);
       const hidden=bubblePoint.z < -1||bubblePoint.z>1||Math.abs(bubblePoint.x)>1.15||Math.abs(bubblePoint.y)>1.15;
       bubble.element.hidden=hidden;if(hidden)continue;
       const x=Math.max(95,Math.min(width-95,(bubblePoint.x*.5+.5)*width)),y=(-bubblePoint.y*.5+.5)*height;
@@ -186,7 +197,7 @@ export function createJumpGameScene(host:HTMLElement,appearance:AvatarAppearance
     playEffect:effects.play,
     setServerTime(serverTime:number){if(Number.isFinite(serverTime))serverOffset=serverTime-Date.now();},
     movement(x:number,z:number){hasMovementInput=Math.abs(x)+Math.abs(z)>.01;return{x:x*Math.cos(yaw)+z*Math.sin(yaw),z:z*Math.cos(yaw)-x*Math.sin(yaw)};},
-    setAppearance(value:AvatarAppearance){const key=appearanceKey(value);if(key===appearanceId)return;appearanceId=key;avatar=replaceOfficeAvatarAppearance(avatar,0x7a9bb4,value);},
+    setAppearance(value:AvatarAppearance){const key=appearanceKey(value);if(key===appearanceId)return;appearanceId=key;avatar=replaceOfficeAvatarAppearance(avatar,0x7a9bb4,value);if(selfLabel)selfLabel.position.y=avatarLabelY(avatar);},
     render(state:JumpState,dt:number,time:number,now=Date.now()+serverOffset){
       if(disposed||renderer.getContext().isContextLost())return;
       const width=Math.max(1,host.clientWidth),height=Math.max(1,host.clientHeight);
