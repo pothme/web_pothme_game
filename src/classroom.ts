@@ -547,7 +547,9 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   const refreshmentHit = new THREE.Mesh(new THREE.BoxGeometry(station.width + 0.5, 3.6, station.depth + 0.3), new THREE.MeshBasicMaterial({ visible: false }));
   refreshmentHit.position.set(station.x, 1.8, station.z); refreshmentHit.userData.refreshments = true; room.add(refreshmentHit);
   const jumpPortal = createJumpPortal(); room.add(jumpPortal.group);
-  const jumpInteract = document.createElement('button'); jumpInteract.type='button'; jumpInteract.className='pantry-interact'; jumpInteract.hidden=true; jumpInteract.textContent='↟ 점프 타워 입장 · E'; jumpInteract.onclick=()=>approachJumpPortal(); container.append(jumpInteract);
+  // A touch screen has no E key to press: the prompt itself is the button.
+  const jumpPromptText = matchMedia('(pointer:coarse)').matches ? '♟ 게임룸 입장' : '♟ 게임룸 입장 · E';
+  const jumpInteract = document.createElement('button'); jumpInteract.type='button'; jumpInteract.className='pantry-interact'; jumpInteract.hidden=true; jumpInteract.textContent=jumpPromptText; jumpInteract.onclick=()=>approachJumpPortal(); container.append(jumpInteract);
   const pantryInteract=document.createElement('button');
   pantryInteract.type='button'; pantryInteract.className='pantry-interact'; pantryInteract.hidden=true;
   pantryInteract.textContent='☕ 스낵바 이용 · E'; pantryInteract.setAttribute('aria-label','가까운 스낵바에서 음료와 간식 고르기');
@@ -662,6 +664,8 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   let communityPresetActive = false;
   const keys = new Set<string>();
   const touchKeys = new Set<string>();
+  /** Analog stick input in screen space: x right, z toward the viewer; length 0..1. */
+  const touchStick = { x: 0, z: 0 };
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const marker = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.2, 32), new THREE.MeshBasicMaterial({ color: 0x95d8dc, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
@@ -670,7 +674,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   seatHighlight.rotation.x = -Math.PI / 2; seatHighlight.visible = false; room.add(seatHighlight);
 
   function clearMovement() {
-    keys.clear(); touchKeys.clear(); path = []; dirtyPosition = false; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false;
+    keys.clear(); touchKeys.clear(); touchStick.x = touchStick.z = 0; path = []; dirtyPosition = false; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false;
   }
   function prepareShoulderLink() {
     const self = selfId ? avatars.get(selfId) : undefined;
@@ -690,6 +694,14 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     self.target.copy(self.group.position);
     path = []; dirtyPosition = false; marker.visible = false; lastSent = performance.now();
     trackSelf();
+  }
+  function setMoveStick(x: number, z: number) {
+    const length = Number.isFinite(x) && Number.isFinite(z) ? Math.hypot(x, z) : 0;
+    if (length < .01) { touchStick.x = touchStick.z = 0; return; }
+    if (!renderingActive || document.hidden || !selfId || modalOpen() || focusedInput(document.activeElement) || pendingSeatAction?.kind === 'sit' || pendingSeatAction?.kind === 'external') { touchStick.x = touchStick.z = 0; return; }
+    if (avatars.get(selfId)?.seat !== null) requestStand();
+    const scale = length > 1 ? 1 / length : 1;
+    touchStick.x = x * scale; touchStick.z = z * scale; path = []; approachingRefreshments = false; approachingJumpPortal = false;
   }
   function setMoveInput(direction: 'forward' | 'back' | 'left' | 'right', pressed: boolean) {
     const key = { forward: 'w', back: 's', left: 'a', right: 'd' }[direction];
@@ -758,7 +770,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     const self=selfId?avatars.get(selfId):undefined;
     const portalNear=!!self&&self.seat===null&&nearJumpPortal(self.group.position.x,self.group.position.z);
     jumpInteract.hidden=!renderingActive||view!=='room'||callbacks.isConnected?.()===false||modalOpen()||(!portalNear&&!approachingJumpPortal);
-    jumpInteract.textContent=approachingJumpPortal?'점프 타워로 이동 중':'↟ 점프 타워 입장 · E';
+    jumpInteract.textContent=approachingJumpPortal?'게임룸 입구로 이동 중':jumpPromptText;
     const near=!!self&&self.seat===null&&Math.hypot(self.group.position.x-station.x,self.group.position.z-station.z)<=station.interactionRadius-.1;
     const hidden=!renderingActive||view!=='room'||callbacks.isConnected?.()===false||modalOpen()||(!near&&!approachingRefreshments);
     if(pantryInteract.hidden!==hidden)pantryInteract.hidden=hidden;
@@ -999,7 +1011,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     }
   }
   function keyUp(event: KeyboardEvent) { keys.delete(event.key.length === 1 ? event.key.toLowerCase() : event.key); }
-  function pauseForInput() { keys.clear(); touchKeys.clear(); path = []; resumeDestination = null; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false; }
+  function pauseForInput() { keys.clear(); touchKeys.clear(); touchStick.x = touchStick.z = 0; path = []; resumeDestination = null; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false; }
   function focusIn(event: FocusEvent) { if (focusedInput(event.target)) pauseForInput(); }
   function blur() { pauseForInput(); activePointers.clear(); gestureDragged = true; seatHint.style.display = 'none'; seatHighlight.visible = false; }
   const activePointers = new Set<number>();
@@ -1270,6 +1282,9 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   function animate(time: number) {
     animationId = 0;
     if (disposed || !renderingActive || document.hidden) { previousTime = time; return; }
+    // While someone types on a phone the room is mostly covered by the keyboard and the
+    // composer; drawing it at 20 Hz leaves the main thread and GPU to the text field.
+    if (compactLayout.matches && time - previousTime < 45 && focusedInput(document.activeElement)) { animationId = requestAnimationFrame(animate); return; }
     frameServerNow = Date.now() + serverTimeOffset;
     frameLocalNow = performance.timeOrigin + performance.now();
     const dt = Math.min((time - previousTime) / 1000, 0.05); previousTime = time;
@@ -1293,7 +1308,13 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
       if (pressed('a') || pressed('ArrowLeft')) { direction.x -= cameraRight.x; direction.y -= cameraRight.z; }
       if (pressed('d') || pressed('ArrowRight')) { direction.x += cameraRight.x; direction.y += cameraRight.z; }
       const distance = dt * NORMAL_MOVE_SPEED;
-      if (direction.lengthSq() > 0) direction.normalize().multiplyScalar(distance);
+      // Keys always walk at full speed; the stick alone walks slower when pushed only part-way.
+      let pace = 1;
+      if (direction.lengthSq() === 0 && (touchStick.x || touchStick.z)) {
+        direction.set(cameraRight.x * touchStick.x - cameraForward.x * touchStick.z, cameraRight.z * touchStick.x - cameraForward.z * touchStick.z);
+        pace = Math.max(.35, Math.min(1, Math.hypot(touchStick.x, touchStick.z)));
+      }
+      if (direction.lengthSq() > 0) direction.normalize().multiplyScalar(distance * pace);
       else if (path.length) {
         const p = path[0]; direction.set(p.x - self.group.position.x, p.y - self.group.position.z);
         const length = direction.length();
@@ -1468,5 +1489,5 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     latestChats.clear(); renderer.dispose(); renderer.domElement.remove(); cssRenderer.domElement.remove();
     chartWalls.front.host.remove(); chartWalls.rear.host.remove(); bubbleLayer.remove(); pantryInteract.remove(); jumpInteract.remove();
   }
-  return { setSelfId, setPlayers, updatePlayerMovement, updatePlayerAction, predictJump, setView, viewFrontCharts: () => setView('chart', 'front'), viewRearCharts: () => setView('chart', 'rear'), viewCommunity, approachRefreshments, approachJumpPortal, setJumpLeaderboard: jumpPortal.setLeaderboard, prepareShoulderLink, resetView, setFollow, isFollowing: () => followingSelf, panView, rotateView, tiltView, zoomView, correctPosition, setMoveInput, setRenderingActive, getWallChartHost: (side: ChartWallSide = 'front') => chartWalls[side].host, setMarketLabel, setPopularPosts, setServerTime, showChat, clearChats, pauseMovement: clearMovement, stopMovement, cancelSeatAction, dispose };
+  return { setSelfId, setPlayers, updatePlayerMovement, updatePlayerAction, predictJump, setView, viewFrontCharts: () => setView('chart', 'front'), viewRearCharts: () => setView('chart', 'rear'), viewCommunity, approachRefreshments, approachJumpPortal, setJumpLeaderboard: jumpPortal.setLeaderboard, prepareShoulderLink, resetView, setFollow, isFollowing: () => followingSelf, panView, rotateView, tiltView, zoomView, correctPosition, setMoveInput, setMoveStick, setRenderingActive, getWallChartHost: (side: ChartWallSide = 'front') => chartWalls[side].host, setMarketLabel, setPopularPosts, setServerTime, showChat, clearChats, pauseMovement: clearMovement, stopMovement, cancelSeatAction, dispose };
 }

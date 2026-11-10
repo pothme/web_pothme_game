@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JumpPrediction } from '../src/jump-client';
-import { createJumpState, stepJumpState, type JumpInput } from '../shared/jump-game';
+import { createJumpState, createJumpStateOn, JUMP_RULES, stepJumpState, type JumpInput } from '../shared/jump-game';
 
 const input=(seq:number):JumpInput=>({seq,x:seq<12?.4:0,z:seq<18?.6:0,jump:seq===1||seq===14});
 
@@ -36,11 +36,11 @@ test('acknowledged prefixes are retired and reconnect resends only the pending s
 });
 
 test('late snapshots cannot rewind a run and a retry cannot replay inputs from the old run',()=>{
-  const client=new JumpPrediction({runId:'a',ackSeq:15,state:createJumpState(10)});
+  const client=new JumpPrediction({runId:'a',ackSeq:15,state:createJumpStateOn(10)});
   client.advance({x:1,z:0,jump:true});const before=client.state;
   assert.equal(client.reconcile({runId:'a',ackSeq:14,state:createJumpState()}),false);
   assert.strictEqual(client.state,before);
-  const retry=createJumpState(10);client.reconcile({runId:'b',ackSeq:0,state:retry});
+  const retry=createJumpState();client.reconcile({runId:'b',ackSeq:0,state:retry});
   assert.deepEqual(client.state,retry);assert.equal(client.queued,0);assert.deepEqual(client.outgoing(),[]);
   client.advance({x:0,z:0,jump:true});assert.equal(client.outgoing()[0].seq,1);
 });
@@ -50,6 +50,6 @@ test('prediction is bounded during network stalls and stops at the summit',()=>{
   for(let i=0;i<150;i++)assert.equal(client.advance({x:0,z:0,jump:false}),true);
   const tick=client.state.tick;assert.equal(client.advance({x:1,z:0,jump:true}),false);assert.equal(client.state.tick,tick);
   assert.equal(client.outgoing(100).length,12,'server batch limit remains enforced');
-  client.reconcile({runId:'summit',ackSeq:0,state:createJumpState(60)});
+  client.reconcile({runId:'summit',ackSeq:0,state:createJumpStateOn(JUMP_RULES.floors)});
   assert.equal(client.advance({x:1,z:0,jump:true}),false);assert.equal(client.queued,0);
 });

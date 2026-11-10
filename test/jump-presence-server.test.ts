@@ -10,7 +10,7 @@ type Peer = Awaited<ReturnType<typeof join>>;
 const social = (message: Message) => message.type === 'jump-presence' || message.type === 'jump-positions';
 const ids = (message: Message) => (message.peers as JumpPeerView[]).map(peer => peer.id).sort();
 
-test('tower roster and movement reach tower peers only, with live appearance, exit and reconnect updates', { timeout: 30_000 }, async () => {
+test('tower roster, movement and ranking reach the members of one tower room only, with live appearance, exit and reconnect updates', { timeout: 30_000 }, async () => {
   const { mf, room } = await createHarness();
   try {
     const cookieA = await identity(mf), cookieB = await identity(mf), cookieOffice = await identity(mf);
@@ -28,7 +28,17 @@ test('tower roster and movement reach tower peers only, with live appearance, ex
       return response.state;
     };
     await room.testPositions({ [idA]: { x: JUMP_PORTAL.x, z: JUMP_PORTAL.z }, [idB]: { x: JUMP_PORTAL.x, z: JUMP_PORTAL.z } });
+    await room.testTowerRoom([idA, idB], 'sky-room');
+    // A third climber plays the same tower in a different room.
+    const other = await join(mf, await identity(mf), '다른방도전자'), idOther = other.welcome.me.id as string;
+    await room.testTowerRoom(idOther, 'other-room');
+    const stateOther = await command(other, 'jump-enter');
+    assert.equal(stateOther.roomId, 'other-room');
+    assert.deepEqual(ids(await other.wait(message => message.type === 'jump-presence')), [idOther]);
+    assert.deepEqual((await other.wait(message => message.type === 'jump-room')).ranking.map((row: { id: string }) => row.id), [idOther]);
     let stateA = await command(a, 'jump-enter');
+    assert.equal(stateA.roomId, 'sky-room');
+    assert.equal(stateA.state.tick, stateOther.state.tick, 'both rooms share one arena clock');
     assert.equal(stateA.active, true);
     assert.deepEqual(ids(await a.wait(message => message.type === 'jump-presence')), [idA]);
     assert.equal(b.messages.some(social), false, 'an office visitor must not receive tower presence');
@@ -38,6 +48,12 @@ test('tower roster and movement reach tower peers only, with live appearance, ex
     const rosterB = await b.wait(message => message.type === 'jump-presence' && message.peers.length === 2);
     assert.deepEqual(ids(rosterA), both);
     assert.deepEqual(ids(rosterB), both);
+    assert.equal(rosterA.roomId, 'sky-room');
+    const rankA = await a.wait(message => message.type === 'jump-room' && message.ranking.length === 2), rankB = await b.wait(message => message.type === 'jump-room' && message.ranking.length === 2);
+    assert.deepEqual(rankA.ranking, rankB.ranking);
+    assert.equal(rankA.roomId, 'sky-room');
+    assert.deepEqual(rankA.ranking.map((row: { id: string }) => row.id).sort(), both);
+    assert.deepEqual(Object.keys(rankA.ranking[0]).sort(), ['bestFloor', 'floor', 'id', 'nickname'], 'the ranking exposes floors only');
     assert.equal(rosterA.serverTime, now);
     const initialA = (rosterA.peers as JumpPeerView[]).find(peer => peer.id === idA)!;
     assert.equal(initialA.nickname, '첫도전자');
@@ -87,5 +103,14 @@ test('tower roster and movement reach tower peers only, with live appearance, ex
     assert.deepEqual(ids(rejoined), both);
     assert.equal(rejoined.peers.find((view: JumpPeerView) => view.id === idB).nickname, '돌아온도전자');
     assert.equal(office.messages.some(social), false, 'office visitors never receive private tower roster or movement packets');
+    assert.equal(office.messages.some(message => message.type === 'jump-room'), false);
+    // Nothing from the first room ever reached the climber in the other room, and the reverse.
+    const leaked = (peer: Peer, foreign: string[]) => peer.messages.some(message => (message.type === 'jump-presence' && message.peers.some((view: JumpPeerView) => foreign.includes(view.id)))
+      || (message.type === 'jump-positions' && message.players.some((motion: JumpPeerMotion) => foreign.includes(motion[0])))
+      || (message.type === 'jump-room' && message.ranking.some((row: { id: string }) => foreign.includes(row.id))));
+    assert.equal(leaked(other, [idA, idB]), false, 'another room never sees this room');
+    assert.equal(leaked(a, [idOther]), false, 'this room never sees another room');
+    assert.equal(other.messages.some(message => message.type === 'jump-positions'), false, 'movement in another room is not even sent');
+    assert.equal((await room.testSnapshot()).players.filter(player => player.area === 'jump').length, 3, 'the office still sees who is in the tower');
   } finally { await mf.dispose(); }
 });

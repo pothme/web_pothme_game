@@ -19,7 +19,8 @@ import { createJumpAction } from '../shared/avatar-jump';
  *  ?only=strip&pose=walk[&n=8&step=50]     one figure at n moments, `step` ms apart, starting at ?t (&plain=1 default outfit)
  *  ?only=office&labels=1[&gap=2.2&blob=0]   name plates and the self ring as in the office; spacing; without contact blobs
  *  ?only=thumbs[&slots=top,shoes&size=240&cols=6]  item thumbnails from the real thumbnail renderer
- *  ?only=table[&n=6&w=390&h=300] | ?only=tower[&walk=1] the real game-room table / jump-tower scenes (own renderers and loops)
+ *  ?only=table[&n=6&w=390&h=300] | ?only=tower[&floor=33…] the real game-room table / jump-tower scenes (own renderers and loops;
+ *                                          the tower's parameters are listed beside its section below)
  *  ?only=room[&n=50&far=6&w=1400&h=760]    the real office with n visitors arriving in one roster; far = zoom-out steps of the free camera */
 type Pose = 'idle' | 'walk' | 'sit' | 'carry' | 'carry-walk' | 'sit-carry' | AvatarActionKind;
 type Cast = { label: string; appearance: AvatarAppearance; yaw?: number; pose?: Pose; color?: number; offset?: number };
@@ -232,18 +233,70 @@ if (only?.includes('table')) {
   });
 }
 if (only?.includes('tower')) {
-  const section = document.createElement('section'), box = document.createElement('div');
-  section.innerHTML = '<h2>09 · 점프 타워 (실제 장면)</h2>'; box.className = 'frame'; box.style.cssText = 'position:relative;width:1100px;height:620px'; section.append(box); host.append(section);
-  void Promise.all([import('../src/jump-game-scene'), import('../shared/jump-game')]).then(([{ createJumpGameScene }, { createJumpState, JUMP_COURSE }]) => {
-    const tower = createJumpGameScene(box, hero[1].appearance); tower.canvas.style.cssText = 'width:100%;height:100%;display:block';
-    const state = { ...createJumpState(), vx: params.get('walk') ? 2 : 0 }, floor = JUMP_COURSE[0];
-    const peers = speciesCast.slice(1, 4).map((person, index) => ({ id: `peer-${index}`, nickname: person.label, appearance: person.appearance, color: 0x336699 + index * 977, x: floor.x + (index - 1) * .9, y: state.y, z: floor.z - .9, vx: index === 1 ? 1.5 : 0, vy: 0, vz: 0, floor: 0, grounded: true, updatedAt: Date.now() }));
-    let last = performance.now();
-    const loop = (time: number) => {
-      tower.setPeers('me', [{ ...peers[0], id: 'me', nickname: '나', x: state.x, z: state.z }, ...peers.map(peer => ({ ...peer, updatedAt: Date.now() }))] as never);
-      tower.render(state, Math.min(.05, (time - last) / 1000), time); last = time; requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
+  // ?only=tower[&floor=33 | &floors=31,33,36][&tick=600][&look=34&phase=warn|on|padwarn|off][&air=1.5][&crumble=20]
+  //   [&orbit=1.2&pitch=.8][&w=1100&h=620][&anim=1][&fx=saw][&fall=1 | &fall=retry][&peers=0][&walk=1]
+  // floor: pad to stand on · floors: one frame per pad · look/phase: move the clock to the first tick where pad `look`
+  // (default: the next pad) warns / fires / is about to vanish / is gone · air: metres above the pad · crumble: ticks
+  // since the looked-at crumbling pad was stepped on · anim: let the arena clock run · fx: replay that hit burst ·
+  // fall: show the restart from that floor · orbit/pitch: turn the automatic camera.
+  const number = (key: string, fallback: number) => params.get(key) === null ? fallback : Number(params.get(key));
+  const floors = (params.get('floors') ?? params.get('floor') ?? '0').split(',').map(Number);
+  const width = number('w', floors.length > 1 ? 540 : 1100), height = number('h', floors.length > 1 ? 400 : 620);
+  const section = document.createElement('section'), grid = document.createElement('div');
+  section.innerHTML = '<h2>09 · 점프 타워 (실제 장면)</h2>'; grid.style.cssText = `display:grid;grid-template-columns:repeat(${Math.min(floors.length, number('cols', 3))},${width}px);gap:8px`; section.append(grid); host.append(section);
+  void Promise.all([import('../src/jump-game-scene'), import('../shared/jump-game')]).then(([{ createJumpGameScene }, { alignJumpClock, createJumpStateOn, getJumpPlatformView, respawnJumpState, JUMP_COURSE, JUMP_RULES }]) => {
+    for (const floor of floors) {
+      const box = document.createElement('div'), tag = document.createElement('span');
+      box.className = 'frame'; box.style.cssText = `position:relative;width:${width}px;height:${height}px`; grid.append(box);
+      const tower = createJumpGameScene(box, hero[1].appearance); tower.canvas.style.cssText = 'width:100%;height:100%;display:block';
+      const look = Math.min(JUMP_RULES.floors, number('look', floor + 1)), watched = JUMP_COURSE[look], phase = params.get('phase'), crumbleAt: Record<string, number> = {};
+      let tick = number('tick', 600);
+      if (phase) for (let search = 0; search < 3000; search++) {
+        const view = getJumpPlatformView(watched, tick, { crumbleAt });
+        if (phase === 'warn' ? view.hazardWarning : phase === 'on' ? view.hazardActive && !view.hazardWarning && (watched.hazard !== 'cannon' || search > 12) : phase === 'padwarn' ? view.padWarning : !view.active) break;
+        tick++;
+      }
+      if (params.get('crumble')) crumbleAt[String(look)] = tick - number('crumble', 20);
+      let state = { ...createJumpStateOn(floor, tick), crumbleAt, vx: params.get('walk') ? 2 : 0 };
+      if (params.get('air')) state = { ...state, y: state.y + number('air', 1.5), grounded: false, standingFloor: null, jumps: 1, vy: 2 };
+      const start = state, pad = JUMP_COURSE[floor];
+      const label = `${floor}F → ${look}F ${watched.motion}/${watched.surface}/${watched.hazard ?? '-'} · tick ${tick}`;
+      tag.textContent = label; tag.style.left = '50%'; box.append(tag);
+      const peers = params.get('peers') === '0' ? [] : speciesCast.slice(1, 4).map((person, index) => ({ id: `peer-${index}`, nickname: person.label, appearance: person.appearance, color: 0x336699 + index * 977, x: pad.x + (index - 1) * .9, y: start.y - (params.get('air') ? number('air', 1.5) : 0), z: pad.z - .9, vx: index === 1 ? 1.5 : 0, vy: 0, vz: 0, floor, grounded: true, updatedAt: Date.now() }));
+      tower.resetCamera(state);
+      if (params.get('orbit') || params.get('pitch')) tower.orbit(number('orbit', 0), number('pitch', .8));
+      let last = performance.now(), frames = 0; const began = last;
+      const loop = (time: number) => {
+        if (params.get('anim')) state = alignJumpClock(start, tick + Math.floor((time - began) / JUMP_RULES.stepMs));
+        // The restart is shown by a real respawn, a few frames after the scene has seen the climb.
+        if (params.get('fall') && frames === 6) { state = respawnJumpState({ ...state, y: state.y - 7, grounded: false }); tower.resetCamera(state, params.get('fall') === 'retry' ? 'retry' : undefined); }
+        if (params.get('fx') && frames % (params.get('fxrate') ? Number(params.get('fxrate')) : 30) === 2) tower.playEffect({ id: `lab-${frames}`, kind: 'hit', hitKind: params.get('fx') as never, x: state.x, y: state.y, z: state.z, vx: 4, vz: 1, tick: state.tick, intensity: 1 });
+        tower.setPeers('me', [{ ...(peers[0] ?? { appearance: hero[1].appearance, color: 0x7a9bb4, vx: 0, vy: 0, vz: 0, grounded: true }), id: 'me', nickname: '나', x: state.x, y: state.y, z: state.z, floor: state.lastFloor, updatedAt: Date.now() }, ...peers.map(peer => ({ ...peer, updatedAt: Date.now() }))] as never);
+        tower.render(state, Math.min(.05, (time - last) / 1000), time); last = time; frames++; requestAnimationFrame(loop);
+        if (frames % 5 === 0) { const info = tower.stats(); tag.textContent = `${label} · ${info.calls} draws · ${Math.round(info.triangles / 1000)}k tris`; tag.dataset.stats = `${floor}:${info.calls}:${info.triangles}:${info.geometries}:${info.textures}`; }
+      };
+      requestAnimationFrame(loop);
+    }
+  });
+}
+// Every hit burst and movement cue of the tower at one frozen moment: ?only=burst[&at=.35] (0…1 through the burst).
+if (only?.includes('burst')) {
+  void import('../src/jump-effects').then(({ createJumpEffects }) => {
+    const at = Number(params.get('at') ?? .35), cell = 3, scene = studioScene(); scene.background = new THREE.Color(0xb9c3c9);
+    const events = [
+      ...(['spikes', 'sweep', 'pusher', 'hammer', 'laser', 'saw', 'cannon', 'flame'] as const).map(hitKind => ({ label: hitKind, duration: 660, event: { kind: 'hit' as const, hitKind, vx: 5, vz: 1 } })),
+      { label: 'jump ×2', duration: 300, event: { kind: 'jump' as const, doubleJump: true } }, { label: 'spring', duration: 300, event: { kind: 'jump' as const, doubleJump: false, spring: true } },
+      { label: 'land', duration: 340, event: { kind: 'land' as const, impactSpeed: 12 } }, { label: 'restart', duration: 420, event: { kind: 'trap' as const, trap: 'fall' as const, phase: 'fire' as const, floor: 30 } },
+    ];
+    const width = events.length * cell, camera = new THREE.PerspectiveCamera(30, width * 46 / 300, .1, 100); camera.position.set(0, 7.5, 13.5); camera.lookAt(0, .5, 0); camera.updateMatrixWorld();
+    events.forEach((entry, index) => {
+      // One pool per cell with its own frozen clock, so every burst is seen at the same point of its life.
+      let now = 0; const effects = createJumpEffects(scene, { now: () => now, reducedMotion: () => false }), x = (index + .5) * cell - width / 2;
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(2.4, .2, 2.4), new THREE.MeshStandardMaterial({ color: 0x8e9aa3, roughness: .9 })); pad.position.set(x, -.1, 0); scene.add(pad);
+      effects.play({ id: `lab-${index}`, x, y: 0, z: 0, tick: 0, intensity: 1, ...entry.event }); now = entry.duration * at; effects.update(now, camera);
+    });
+    addSection('burst', `12 · 점프 타워 타격 · 이동 효과 (진행 ${Math.round(at * 100)}%)`, width * 46, 300, scene, camera, 1, [], events.map((entry, index) => ({ text: entry.label, x: (index + .5) * cell * 46 })));
+    sections.at(-1)!.draw(frozen);
   });
 }
 // The real office with a full roster arriving at once. The heading reports how

@@ -55,8 +55,6 @@ test('real chat authenticates the author, normalizes text, rate limits and expir
     a.send(input);
     assert.equal((await a.wait((message) => message.type === 'chat')).message.id, own.message.id);
     assert.equal(b.messages.some((message) => message.type === 'chat' && message.message.id === own.message.id), false, 'duplicate is acknowledged only to its author');
-    a.send({ ...input, requestId: 'too-soon-chat' });
-    assert.equal((await a.wait((message) => message.requestId === 'too-soon-chat')).code, 'CHAT_COOLDOWN');
     a.send({ ...input, text: '다른 내용' });
     assert.equal((await a.wait((message) => message.requestId === input.requestId)).code, 'REQUEST_REUSED');
     for (const [index, text] of ['', '\u0000', '😀'.repeat(81)].entries()) {

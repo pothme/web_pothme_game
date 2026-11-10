@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JumpPrediction } from '../src/jump-client';
-import { alignJumpClock, createJumpState, getJumpPlatformView, JUMP_COURSE, stepJumpState, type JumpInput, type JumpState } from '../shared/jump-game';
+import { alignJumpClock, createJumpState, createJumpStateOn, getJumpPlatformView, JUMP_COURSE, JUMP_RULES, stepJumpState, type JumpInput, type JumpState } from '../shared/jump-game';
 
 function doubleJumpToSecondFloor() {
   let state=createJumpState(); const frames:JumpInput[]=[];
@@ -51,7 +51,7 @@ test('the server batch allowance keeps up with 50Hz physics at a 22ms render cad
 
 test('shared-clock alignment carries a moving-platform rider without simulating unreceived movement',()=>{
   const platform=JUMP_COURSE.find(p=>p.kind==='moving')!,tick=12000;
-  const state={...createJumpState(0,tick),floor:platform.floor,standingFloor:platform.floor};
+  const state=createJumpStateOn(platform.floor,tick);
   const start=getJumpPlatformView(platform,tick,state);state.x=start.x+.2;state.y=start.y;state.z=start.z-.1;
   const aligned=alignJumpClock(state,tick+150),end=getJumpPlatformView(platform,tick+150,aligned);
   assert.equal(aligned.tick,tick+150);assert.ok(Math.abs(aligned.x-end.x-.2)<1e-10);assert.ok(Math.abs(aligned.z-end.z+.1)<1e-10);
@@ -61,8 +61,8 @@ test('shared-clock alignment carries a moving-platform rider without simulating 
 });
 
 test('shared-clock creation and air alignment preserve relative jump guards without teleporting',()=>{
-  const tick=85_000_000_000,initial=createJumpState(10,tick);
-  assert.equal(initial.tick,tick);assert.equal(initial.lastJumpTick,tick-100);assert.equal(initial.invulnerableUntil,tick+50);
+  const tick=85_000_000_000,initial=createJumpStateOn(10,tick);
+  assert.equal(initial.tick,tick);assert.equal(initial.lastJumpTick,tick-100);assert.equal(initial.invulnerableUntil,tick+JUMP_RULES.spawnInvulnerabilityTicks);assert.equal(createJumpState(tick).standingFloor,0);
   const jumped=stepJumpState(initial,{seq:1,x:1,z:0,jump:true}).state;
   const aligned=alignJumpClock(jumped,tick+100);
   assert.equal(aligned.tick,tick+100);assert.equal(aligned.x,jumped.x);assert.equal(aligned.y,jumped.y);assert.equal(aligned.z,jumped.z);
@@ -72,7 +72,7 @@ test('shared-clock creation and air alignment preserve relative jump guards with
 test('prediction reconciliation preserves an authoritative trap impulse and replays airborne steering',()=>{
   const platform=JUMP_COURSE.find(candidate=>candidate.kind==='spikes')!;
   let tick=12000;while(!getJumpPlatformView(platform,tick+1).hazardActive)tick++;
-  const view=getJumpPlatformView(platform,tick+1),initial:JumpState={...createJumpState(Math.floor(platform.floor/10)*10,tick),x:view.x,y:view.y,z:view.z,floor:platform.floor,standingFloor:platform.floor,invulnerableUntil:0};
+  const view=getJumpPlatformView(platform,tick+1),initial:JumpState={...createJumpStateOn(platform.floor,tick),x:view.x,y:view.y,z:view.z,invulnerableUntil:0};
   const client=new JumpPrediction({runId:'hit-run',ackSeq:0,state:initial});
   const frames=Array.from({length:12},(_,index)=>({seq:index+1,x:index===0?0:-.5,z:0,jump:index===8}));
   let expected=initial,first=initial;

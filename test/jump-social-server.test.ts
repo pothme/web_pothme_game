@@ -5,10 +5,12 @@ import type { FixtureRoom } from './harness.mjs';
 import { identity, join, login, manage } from './office-helpers';
 import { JUMP_PORTAL } from '../shared/jump-portal';
 import { JUMP_SOCIAL_RULES } from '../shared/jump-social';
+import { CHAT_BURST } from '../shared/chat-burst';
 
 type Client = Awaited<ReturnType<typeof join>>;
-async function enter(room: FixtureRoom, client: Client, requestId: string) {
+async function enter(room: FixtureRoom, client: Client, requestId: string, towerRoom = 'chat-room') {
   await room.testPositions({ [client.welcome.me.id]: { x: JUMP_PORTAL.x, z: JUMP_PORTAL.z } });
+  await room.testTowerRoom(client.welcome.me.id, towerRoom);
   client.send({ type: 'jump-enter', requestId });
   const state = await client.wait(message => message.type === 'jump-state' && message.requestId === requestId);
   assert.equal(state.state.active, true);
@@ -20,7 +22,7 @@ async function barrier(client: Client, requestId: string) {
   await client.wait(message => message.type === 'jump-state' && message.requestId === requestId);
 }
 
-test('tower chat uses server identity/time, normalizes Unicode, and isolates office participants', { timeout: 30_000 }, async () => {
+test('tower chat uses server identity/time, normalizes Unicode, and stays inside one tower room', { timeout: 30_000 }, async () => {
   const { mf, room } = await createHarness();
   try {
     const now = await room.testFreezeClock();
@@ -29,6 +31,8 @@ test('tower chat uses server identity/time, normalizes Unicode, and isolates off
     const office = await join(mf, await identity(mf), '사무실친구');
     await enter(room, a, 'tower-enter-first');
     await enter(room, b, 'tower-enter-second');
+    const elsewhere = await join(mf, await identity(mf), '옆방친구');
+    await enter(room, elsewhere, 'tower-enter-elsewhere', 'second-chat-room');
 
     office.send({ type: 'jump-chat', requestId: 'office-cannot-chat', text: '밖에서 보내기', playerId: a.welcome.me.id });
     assert.equal((await office.wait(message => message.requestId === 'office-cannot-chat')).code, 'JUMP_INACTIVE');
@@ -51,10 +55,22 @@ test('tower chat uses server identity/time, normalizes Unicode, and isolates off
     assert.equal((await a.wait(message => message.requestId === 'tower-office-spoof')).code, 'JUMP_AREA');
     const newcomer = await join(mf, await identity(mf), '방금온친구');
     assert.equal(newcomer.welcome.chats.some((message: { id: string }) => message.id === own.message.id), false, 'tower history is never part of the office welcome');
+    // The other tower room heard nothing, has its own history, and its words stay there too.
+    await barrier(elsewhere, 'elsewhere-barrier');
+    assert.equal(elsewhere.messages.some(message => message.type === 'jump-chat'), false, 'a message never crosses into another tower room');
+    await room.testClock(now + CHAT_BURST.refillMs, false);
+    elsewhere.send({ type: 'jump-chat', requestId: 'second-room-says', text: '옆방 이야기', roomId: 'chat-room' });
+    const there = await elsewhere.wait(message => message.requestId === 'second-room-says');
+    assert.equal(there.type, 'jump-chat');
+    await barrier(a, 'tower-room-barrier');
+    assert.equal(a.messages.some(message => message.type === 'jump-chat'), false, 'the room is decided by the server, not by a field in the message');
+    assert.deepEqual((await enter(room, newcomer, 'newcomer-enters-first-room')).history.map((message: { id: string }) => message.id), [own.message.id]);
+    const moved = await join(mf, await identity(mf), '옆방새친구');
+    assert.deepEqual((await enter(room, moved, 'newcomer-enters-second-room', 'second-chat-room')).history.map((message: { id: string }) => message.id), [there.message.id]);
   } finally { await mf.dispose(); }
 });
 
-test('tower chat retries are idempotent across reconnect and cooldown and length cannot be bypassed', { timeout: 30_000 }, async () => {
+test('tower chat retries are idempotent across reconnect and the burst allowance and length cannot be bypassed', { timeout: 30_000 }, async () => {
   const { mf, room } = await createHarness();
   try {
     const now = await room.testFreezeClock();
@@ -73,8 +89,20 @@ test('tower chat retries are idempotent across reconnect and cooldown and length
     assert.equal(b.messages.some(message => message.type === 'jump-chat'), false, 'retry acknowledges only its sender');
     a.send({ ...input, text: '같은 번호의 다른 내용' });
     assert.equal((await a.wait(message => message.requestId === input.requestId)).code, 'REQUEST_REUSED');
+    // Five messages go back to back (the retry above cost nothing); the sixth names the time of the next token.
+    const burst: string[] = [first.message.id];
+    for (let index = 0; index < 4; index++) {
+      const requestId = `tower-burst-${index}`;
+      a.send({ type: 'jump-chat', requestId, text: `연속 ${index}` });
+      const accepted = await a.wait(message => message.requestId === requestId);
+      assert.equal(accepted.type, 'jump-chat'); burst.push(accepted.message.id);
+      assert.equal((await b.wait(message => message.type === 'jump-chat')).message.text, `연속 ${index}`);
+    }
+    // Half a second on (the socket's own flood guard is a separate, older limit) the chat allowance is still empty.
+    await room.testClock(now + CHAT_BURST.refillMs / 2, false);
     a.send({ ...input, requestId: 'tower-too-fast' });
-    assert.equal((await a.wait(message => message.requestId === 'tower-too-fast')).code, 'CHAT_COOLDOWN');
+    const limited = await a.wait(message => message.requestId === 'tower-too-fast');
+    assert.equal(limited.code, 'CHAT_COOLDOWN'); assert.equal(limited.retryAt, now + CHAT_BURST.refillMs);
     for (const [index, text] of ['', '\u0000\n', '😀'.repeat(81), 123].entries()) {
       const requestId = `tower-invalid-${index}`;
       a.send({ type: 'jump-chat', requestId, text });
@@ -85,19 +113,51 @@ test('tower chat retries are idempotent across reconnect and cooldown and length
     a = await join(mf, cookie, '새닉네임');
     assert.equal(a.welcome.me.area, 'jump');
     const restored = await a.wait(message => message.type === 'jump-chat-history');
-    assert.equal(restored.messages.length, 1);
+    assert.deepEqual(restored.messages.map((message: { id: string }) => message.id), burst);
     a.send(input);
     assert.equal((await a.wait(message => message.requestId === input.requestId)).message.id, first.message.id);
-    await room.testClock(now + JUMP_SOCIAL_RULES.chatCooldownMs - 1, false);
+    await room.testClock(now + CHAT_BURST.refillMs - 1, false);
     a.send({ ...input, requestId: 'reconnect-too-soon' });
-    assert.equal((await a.wait(message => message.requestId === 'reconnect-too-soon')).code, 'CHAT_COOLDOWN');
-    await room.testClock(now + JUMP_SOCIAL_RULES.chatCooldownMs, false);
+    const early = await a.wait(message => message.requestId === 'reconnect-too-soon');
+    assert.equal(early.code, 'CHAT_COOLDOWN', 'a reconnect does not refill the allowance'); assert.equal(early.retryAt, now + CHAT_BURST.refillMs);
+    await room.testClock(now + CHAT_BURST.refillMs, false);
     a.send({ type: 'jump-chat', requestId: 'tower-emoji-eighty', text: '😀'.repeat(80) });
     const next = await a.wait(message => message.requestId === 'tower-emoji-eighty');
     assert.equal(next.type, 'jump-chat');
     assert.equal(next.message.nickname, '새닉네임');
     assert.equal([...next.message.text].length, 80);
     assert.notEqual(next.message.id, first.message.id);
+    // One second bought one message, not a new burst.
+    a.send({ type: 'jump-chat', requestId: 'tower-refill-one-only', text: '하나 더' });
+    assert.equal((await a.wait(message => message.requestId === 'tower-refill-one-only')).retryAt, now + 2 * CHAT_BURST.refillMs);
+  } finally { await mf.dispose(); }
+});
+
+test('the tower burst allowance survives a restart of the room object and refills a token a second', { timeout: 30_000 }, async () => {
+  const { mf, room, restart } = await createHarness();
+  try {
+    const now = await room.testFreezeClock();
+    const cookie = await identity(mf);
+    let a = await join(mf, cookie, '연속친구');
+    await enter(room, a, 'restart-burst-enter');
+    for (let index = 0; index < 5; index++) {
+      a.send({ type: 'jump-chat', requestId: `restart-burst-${index}`, text: `연속 ${index}` });
+      assert.equal((await a.wait(message => message.requestId === `restart-burst-${index}`)).type, 'jump-chat');
+    }
+    await restart();
+    await room.testFreezeClock(now + 10);
+    a = await join(mf, cookie, '연속친구');
+    assert.equal((await a.wait(message => message.type === 'jump-chat-history')).messages.length, 5);
+    a.send({ type: 'jump-chat', requestId: 'restart-burst-sixth', text: '여섯 번째' });
+    const limited = await a.wait(message => message.requestId === 'restart-burst-sixth');
+    assert.equal(limited.code, 'CHAT_COOLDOWN'); assert.equal(limited.retryAt, now + CHAT_BURST.refillMs);
+    await room.testClock(now + 3 * CHAT_BURST.refillMs, false);
+    for (let index = 0; index < 3; index++) {
+      a.send({ type: 'jump-chat', requestId: `restart-refill-${index}`, text: `다시 ${index}` });
+      assert.equal((await a.wait(message => message.requestId === `restart-refill-${index}`)).type, 'jump-chat');
+    }
+    a.send({ type: 'jump-chat', requestId: 'restart-refill-empty', text: '네 번째는 아직' });
+    assert.equal((await a.wait(message => message.requestId === 'restart-refill-empty')).retryAt, now + 4 * CHAT_BURST.refillMs);
   } finally { await mf.dispose(); }
 });
 
@@ -111,7 +171,7 @@ test('tower history keeps the newest forty messages across restart, then expires
     const sent: string[] = [];
     let lastTime = start;
     for (let index = 0; index < 43; index++) {
-      lastTime = start + index * JUMP_SOCIAL_RULES.chatCooldownMs;
+      lastTime = start + index * CHAT_BURST.refillMs;
       await room.testClock(lastTime, false);
       const requestId = `tower-history-${index}`;
       a.send({ type: 'jump-chat', requestId, text: `기록 ${index}` });

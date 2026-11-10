@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureSource = `
  import worker, { Classroom } from './server/index.ts';
- import {JUMP_COURSE,JUMP_RULES,createJumpState,getJumpPlatformView} from './shared/jump-game.ts';
+ import {JUMP_COURSE,JUMP_RULES,createJumpStateOn} from './shared/jump-game.ts';
  export default worker;
  const realNow = Date.now.bind(Date); let offset = 0, frozenNow = null; Date.now = () => frozenNow ?? realNow() + offset;
  export class FixtureClassroom extends Classroom {
@@ -26,13 +26,21 @@ const fixtureSource = `
      const receipt={requestId,signature:JSON.stringify(command),response:{type:'chart-ack',action:'propose',requestId,voteId:'legacy-receipt-vote'}};
      this.ctx.storage.sql.exec('INSERT INTO office_users (id,next_proposal_at,receipts_json) VALUES (?,0,?) ON CONFLICT(id) DO UPDATE SET receipts_json=excluded.receipts_json',id,JSON.stringify([receipt]));
    }
+   // Tower rooms normally come from the game room lobby. Tests place players in one directly;
+   // the table lives in storage so that a restarted object still knows it. '*' means everyone.
+   towerRoomOf(id) { try { const row=this.ctx.storage.sql.exec('SELECT room FROM test_tower_rooms WHERE id IN (?,?) ORDER BY id DESC',id,'*').toArray()[0]; if(row)return row.room||null; } catch {} return super.towerRoomOf(id); }
+   async testTowerRoom(ids, room = 'test-tower-room') {
+     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS test_tower_rooms(id TEXT PRIMARY KEY,room TEXT NOT NULL)');
+     for(const id of [].concat(ids))this.ctx.storage.sql.exec('INSERT INTO test_tower_rooms(id,room) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET room=excluded.room',id,room??'');
+     this.jump.syncRooms();this.publishJumpPresence(true);this.publishJumpRooms();
+   }
    async testTowerStates() { return this.sockets().map(socket=>this.attachment(socket)).filter(player=>this.jump.isActive(player.id)).map(player=>({nickname:player.nickname,state:this.jump.snapshot(player.id)})); }
    async testTowerPreview(floor = 0, mode = 'standing') {
-     const platform=JUMP_COURSE[Math.max(0,Math.min(59,Math.floor(floor)))],now=Date.now();
+     const platform=JUMP_COURSE[Math.max(0,Math.min(JUMP_RULES.floors-1,Math.floor(floor)))],now=Date.now();
      for(const socket of this.sockets()) {
        const player=this.attachment(socket);if(!this.jump.isActive(player.id))continue;
-       const run=this.jump.read(player.id,now),tick=Math.floor(now/JUMP_RULES.stepMs),state=createJumpState(Math.floor(platform.floor/10)*10,tick);
-       const view=getJumpPlatformView(platform,tick,state);Object.assign(state,{x:view.x,y:view.y,z:view.z,floor:platform.floor,standingFloor:platform.floor,invulnerableUntil:mode==='safe'?tick+100000:0});
+       const run=this.jump.read(player.id,now),tick=Math.floor(now/JUMP_RULES.stepMs),state=createJumpStateOn(platform.floor,tick);
+       state.invulnerableUntil=mode==='safe'?tick+100000:0;
        if(mode==='jump'){state.y+=1.6;state.vy=2;state.grounded=false;state.standingFloor=null;state.jumps=1;state.lastJumpTick=tick-18;}
        this.jump.save(player.id,{...run,state,runId:crypto.randomUUID(),ackSeq:0,budgetMs:JUMP_RULES.networkCreditMs,budgetAt:now});this.jump.emit(player.id,now);
      }

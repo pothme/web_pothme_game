@@ -1,6 +1,7 @@
 import { REFRESHMENT_STATION, ROOM_BOUNDS } from './classroom-layout';
 
-/** Walkable doorway beside (not inside) the snack counter. */
+/** Walkable doorway beside (not inside) the snack counter. It is the entrance of the game room;
+ * the names keep "jump" because the door first led straight into the jump tower. */
 export const JUMP_PORTAL = Object.freeze({
   x: ROOM_BOUNDS.minX + 2.4,
   z: REFRESHMENT_STATION.z + 7.2,

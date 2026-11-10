@@ -79,14 +79,46 @@ export function createJumpAudio(options:Options={}){
     const intensity=clamp(event.intensity,0,1);
     try{
       if(event.kind==='jump'){
-        tone('triangle',event.doubleJump?520:300,event.doubleJump?850:540,.16,.18);
-        if(event.doubleJump)tone('sine',920,650,.12,.075,.025);
+        if(event.spring){
+          // A rising "boing": the launch is much taller than a jump.
+          tone('sine',180,700,.22,.2);tone('triangle',360,1100,.18,.08,.03);
+        }else{
+          tone('triangle',event.doubleJump?520:300,event.doubleJump?850:540,.16,.18);
+          if(event.doubleJump)tone('sine',920,650,.12,.075,.025);
+        }
       }else if(event.kind==='land'){
         tone('sine',150,70,.12+intensity*.05,.07+intensity*.14);
         tone('triangle',240,110,.08,.025+intensity*.025);
+        if(event.surface==='ice')tone('sine',1300,900,.06,.04);
+        else if(event.surface==='conveyor')tone('square',95,70,.05,.03);
+      }else if(event.kind==='hit'){
+        // Every trap has its own voice over the same low thump.
+        switch(event.hitKind){
+          case 'pusher':tone('sine',150,58,.2,.25);tone('square',110,70,.12,.06,.01);break;
+          case 'hammer':tone('sine',120,55,.26,.25);tone('triangle',300,90,.2,.12,.02);tone('sine',900,500,.08,.05,.05);break;
+          case 'laser':tone('sine',190,64,.2,.18);tone('sawtooth',1200,300,.18,.07);tone('sine',700,1300,.12,.07,.03);break;
+          case 'saw':tone('sine',170,64,.2,.2);tone('sawtooth',380,140,.22,.08);tone('square',760,420,.1,.04,.04);break;
+          case 'cannon':tone('sine',110,55,.27,.25);tone('triangle',200,70,.2,.14,.01);break;
+          case 'flame':tone('sine',190,64,.2,.18);tone('sawtooth',160,90,.26,.06);tone('sine',500,900,.2,.07,.03);break;
+          default:tone('sine',190,64,.22,.24);tone('triangle',event.hitKind==='spikes'?540:420,170,.25,.11,.025);
+        }
+      }else if(event.phase==='warn'){
+        // Two quick ticks: something on this pad or the next is about to change.
+        tone('triangle',880,880,.05,.05*intensity);tone('triangle',1040,1040,.05,.05*intensity,.09);
       }else{
-        tone('sine',190,64,.22,.24);
-        tone('triangle',event.hitKind==='spikes'?540:420,170,.25,.11,.025);
+        const level=intensity;
+        switch(event.trap){
+          case 'spikes':tone('triangle',700,300,.07,.1*level);break;
+          case 'pusher':tone('square',120,60,.12,.07*level);tone('sine',140,60,.14,.12*level);break;
+          case 'wind':tone('sine',300,520,.28,.06*level);tone('triangle',420,640,.26,.03*level,.02);break;
+          case 'cannon':tone('sine',130,55,.25,.18*level);tone('triangle',260,90,.12,.08*level);break;
+          case 'flame':tone('sawtooth',120,200,.26,.05*level);tone('sine',400,700,.2,.04*level,.04);break;
+          case 'blink':tone('sine',900,300,.14,.08*level);break;
+          case 'crumble':tone('triangle',200,70,.25,.12*level);tone('square',90,60,.12,.04*level,.05);break;
+          case 'shrink':tone('sine',600,380,.12,.07*level);break;
+          // Back on the ground pad: a short falling sigh, then a friendly note upward.
+          case 'fall':tone('sine',520,130,.2,.16);tone('triangle',330,660,.08,.1,.2);break;
+        }
       }
     }catch{stopVoices();/* Audio failures must never interrupt the simulation. */}
   }

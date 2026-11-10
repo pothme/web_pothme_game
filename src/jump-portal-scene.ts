@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { JUMP_PORTAL, type JumpLeaderView } from '../shared/jump-portal';
+import { JUMP_RULES } from '../shared/jump-game';
 
 export function createJumpPortal() {
   const group = new THREE.Group();
@@ -25,19 +26,20 @@ export function createJumpPortal() {
   box(4.22,3.98,.3,-4.05,2.55,.08,metal);
   function setLeaderboard(leaders: JumpLeaderView[]) {
     ctx.fillStyle='#091a29';ctx.fillRect(0,0,768,720);
-    ctx.fillStyle='#8cf1dd';ctx.font='600 22px sans-serif';ctx.fillText('PODEUM ARCADE / 60 FLOORS',45,55);
-    ctx.fillStyle='#f1f7ff';ctx.font='800 64px sans-serif';ctx.fillText('점프 타워',45,140);
-    ctx.fillStyle='#91a9bd';ctx.font='25px sans-serif';ctx.fillText('문을 통과해서 도전하세요  →',45,190);
+    // The door is the entrance of the game room; the board keeps the tower's all-time top three.
+    ctx.fillStyle='#8cf1dd';ctx.font='600 22px sans-serif';ctx.fillText('PODEUM GAME ROOM / ENTRANCE',45,55);
+    ctx.fillStyle='#f1f7ff';ctx.font='800 64px sans-serif';ctx.fillText('게임룸 입구',45,140);
+    ctx.fillStyle='#91a9bd';ctx.font='25px sans-serif';ctx.fillText('문을 지나면 게임룸이 열려요  →',45,190);
     ctx.strokeStyle='#2e465b';ctx.beginPath();ctx.moveTo(45,225);ctx.lineTo(723,225);ctx.stroke();
-    ctx.fillStyle='#8cf1dd';ctx.font='700 24px sans-serif';ctx.fillText('TOP 3  ·  최고 도달 층',45,275);
+    ctx.fillStyle='#8cf1dd';ctx.font='700 24px sans-serif';ctx.fillText(`점프 타워 ${JUMP_RULES.floors}층  ·  TOP 3`,45,275);
     for(let i=0;i<3;i++) {
       const y=338+i*83, leader=leaders[i];
       ctx.fillStyle=i===0?'#f6d995':'#91a9bd';ctx.font='700 30px sans-serif';ctx.fillText(String(i+1).padStart(2,'0'),45,y);
       ctx.fillStyle='#e8f2ff';ctx.font='600 28px sans-serif';ctx.fillText(leader?[...leader.nickname].slice(0,12).join(''):'첫 도전자를 기다려요',112,y,450);
       if(leader){ctx.fillStyle='#8cf1dd';ctx.textAlign='right';ctx.fillText(`${leader.bestFloor}F`,723,y);ctx.textAlign='left';}
     }
-    ctx.fillStyle='#91a9bd';ctx.font='23px sans-serif';ctx.fillText('각 층 +1 PT   정상 +300 PT',45,610);
-    ctx.font='20px sans-serif';ctx.fillText('캐릭터당 최초 1회 · 10층마다 재시작 지점',45,655);
+    ctx.fillStyle='#91a9bd';ctx.font='23px sans-serif';ctx.fillText(`층마다 +${JUMP_RULES.floorReward} PT   ${JUMP_RULES.floors}층 보너스 +${JUMP_RULES.summitReward} PT`,45,610);
+    ctx.font='20px sans-serif';ctx.fillText('전략 게임 3종 · 액션 게임 점프 타워 · 방을 만들어 함께',45,655);
     texture.needsUpdate=true;
   }
   setLeaderboard([]);

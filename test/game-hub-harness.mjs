@@ -7,12 +7,22 @@ export async function createGameHubHarness(){
  const source=`import {DurableObject} from 'cloudflare:workers';import {GameHub} from './server/game-hub';import {defaultAvatarProfile} from './shared/avatar-catalog';
  export default {fetch(){return new Response('fixture');}};
  export class Fixture extends DurableObject {
-  connected=[];packets=[];hub;
+  connected=[];packets=[];hub;towerFloors=new Map();towerBests=new Map();changes=0;
   constructor(ctx,env){super(ctx,env);this.resetHub();}
-  resetHub(){this.hub=new GameHub(this.ctx.storage,{players:()=>this.connected,send:(id,packet)=>this.packets.push({id,packet})});}
+  resetHub(){this.hub=new GameHub(this.ctx.storage,{players:()=>this.connected,send:(id,packet)=>this.packets.push({id,packet}),changed:()=>{this.changes++;},towerFloor:id=>this.towerFloors.get(id)??null,towerBest:id=>this.towerBests.get(id)??0});}
+  // Stand-ins for the jump authority: the hub only ever reads these two values.
+  setTower(id,floor){if(floor===null)this.towerFloors.delete(id);else this.towerFloors.set(id,floor);}
+  setTowerBest(id,best){this.towerBests.set(id,best);}
+  towerRoom(id){return this.hub.towerRoom(id);}
+  towerProgress(roomId,ranking,now){this.hub.towerProgress(roomId,ranking,now);}
+  towerPresence(id,now){this.hub.towerPresence(id,now);}
+  towerRanking(roomId,ranking){return this.hub.towerRanking(roomId,ranking);}
+  towerRoomChanged(roomId,now){this.hub.towerRoomChanged(roomId,now);}
+  location(id){return this.hub.location(id);}
+  changeCount(){return this.changes;}
   testConnect(id,nickname,now){this.connected=this.connected.filter(p=>p.id!==id);this.connected.push({id,nickname});this.hub.joined(id,now);return this.hub.snapshot(id,now);}
   testDisconnect(id,now){this.connected=this.connected.filter(p=>p.id!==id);this.hub.left(id,now);}
-  command(id,input,now){try{this.hub.handle(id,input,now);return {ok:true,state:this.hub.snapshot(id,now)};}catch(error){return {ok:false,code:error.code,message:error.message};}}
+  command(id,input,now){try{this.hub.handle(id,input,now);return {ok:true,state:this.hub.snapshot(id,now)};}catch(error){return {ok:false,code:error.code,message:error.message,retryAt:error.retryAt};}}
   state(id,now){return this.hub.snapshot(id,now);}
   advance(now){this.hub.advance(now);return this.hub.nextAlarmAt();}
   nextAlarm(){return this.hub.nextAlarmAt();}
