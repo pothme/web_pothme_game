@@ -1,7 +1,7 @@
 import { GameError } from './domain';
 import { SEATS } from '../shared/classroom-layout';
 
-export const CHAT_RULES = Object.freeze({ chatMaxLength: 80, chatCooldownMs: 1200, chatTtlMs: 8000 });
+export const CHAT_RULES = Object.freeze({ chatMaxLength: 80, chatTtlMs: 8000 });
 export interface ChatMessage { id: string; playerId: string; nickname: string; text: string; sentAt: number; expiresAt: number }
 
 export function socialRequestId(value: unknown): string {

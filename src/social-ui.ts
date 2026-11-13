@@ -3,6 +3,7 @@ import type { PlayerView } from './scene-types';
 import { compactLayout } from './responsive';
 import { isActionNotice } from '../shared/action-notices';
 import { createSocialFeedGuard } from './social-feed';
+import { CHAT_HOLD_HINT, createChatOutbox } from './chat-outbox';
 import { readChatPreferences, writeChatPreferences, chatBackgroundOpacity, CHAT_LOG_LIMIT, CHAT_VISIBLE_LINES, type ChatPreferenceStorage } from './chat-preferences';
 import './action-notices.css';
 import './social-panel.css';
@@ -43,6 +44,10 @@ export function createSocialUI(options: {
   let pinnedToLatest = true;
   let logWidth = log.clientWidth, logHeight = log.clientHeight;
   function scrollToLatest() { pinnedToLatest = true; log.scrollTop = log.scrollHeight; }
+  // One scroll per frame however many lines arrive (the join history is 30 at once),
+  // so appending never forces a layout between messages.
+  let scrollFrame = 0;
+  function scrollSoon() { pinnedToLatest = true; if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; if (pinnedToLatest) log.scrollTop = log.scrollHeight; }); }
   log.addEventListener('scroll', () => {
     // A browser-generated scroll during rotation must not overwrite the state
     // captured before the viewport changed; ResizeObserver settles that first.
@@ -136,18 +141,30 @@ export function createSocialUI(options: {
   let connected = false;
   let chatEnabled = true;
   let players: PlayerView[] = [];
-  let cooldownUntil = 0;
-  let pendingChat: { id: string; text: string; timer: ReturnType<typeof setTimeout> } | null = null;
+  // Several messages may be on the wire at once; the field is free again as soon as one is sent.
+  const outbox = createChatOutbox({
+    now: options.now, timeoutMs: 5000, timeoutText: '전송을 확인하지 못했어요. 다시 보내 주세요.',
+    read: () => input.value, write: text => { input.value = text; },
+    status: text => { message.textContent = text; },
+    changed: () => tick(),
+    returned: () => { returnedUnseen = true; showReturned(); },
+  });
+  // On a phone the field is hidden until the composer opens: a message that came back while it could not open is shown as soon as it can.
+  let returnedUnseen = false;
+  function showReturned() {
+    if (!returnedUnseen) return;
+    if (!mobile.matches || !input.value.trim()) { returnedUnseen = false; return; }
+    openComposer(false); if (composing) returnedUnseen = false;
+  }
   let pendingSeat: { id: string; timer: ReturnType<typeof setTimeout> } | null = null;
   const feed = createSocialFeedGuard();
 
-  function clearChatPending() { if (pendingChat) clearTimeout(pendingChat.timer); pendingChat = null; }
   function clearSeatPending() { if (pendingSeat) clearTimeout(pendingSeat.timer); pendingSeat = null; }
   function setMessage(text: string) { message.textContent = text; seatMessage.textContent = text; }
   function tick() {
     const count = Array.from(input.value).length;
     panel.querySelector('.chat-count')!.textContent = `${count} / 80`;
-    sendButton.disabled = !connected || !chatEnabled || !!pendingChat || !input.value.trim() || count > 80 || options.now() < cooldownUntil;
+    sendButton.disabled = !connected || !chatEnabled || !input.value.trim() || count > 80 || outbox.waiting();
     input.disabled = !connected || !chatEnabled;
     input.placeholder = chatEnabled ? 'Enter로 대화 시작 · 80자' : '관리자가 채팅을 잠시 껐어요';
     launcher.disabled = !connected || !chatEnabled;
@@ -179,20 +196,27 @@ export function createSocialUI(options: {
     pendingSeat = { id, timer: setTimeout(() => { clearSeatPending(); options.onSeatError(); setMessage('자리 응답을 확인하지 못했어요. 다시 눌러 주세요.'); updateSeats(); }, 5000) };
     updateSeats();
   }
-  form.onsubmit = event => {
-    event.preventDefault();
+  function submitChat() {
     const text = input.value.trim();
-    if (!connected || !chatEnabled || pendingChat || options.now() < cooldownUntil || !text) return;
+    if (!connected || !chatEnabled || !text) return;
     if (Array.from(text).length > 80) { setMessage('채팅은 80자까지 보낼 수 있어요.'); return; }
-    const id = crypto.randomUUID();
+    // An empty allowance keeps the text in the field and says so; nothing typed is dropped.
+    if (!outbox.ready()) return;
+    const id = outbox.requestId(text, () => crypto.randomUUID());
     if (!options.sendChat(text, id)) { setMessage('연결을 복구한 뒤 다시 보내 주세요.'); return; }
-    setMessage('');
-    pendingChat = { id, text, timer: setTimeout(() => { clearChatPending(); setMessage('전송을 확인하지 못했어요. 내용을 남겨두었으니 다시 보내 주세요.'); if (mobile.matches) openComposer(false); tick(); }, 5000) };
-    tick();
-  };
-  input.addEventListener('input', () => { message.textContent = ''; tick(); });
+    setMessage(''); outbox.sent(id, text);
+    // The field is free at once: the next message does not wait for this one's echo.
+    input.value = ''; tick();
+  }
+  form.onsubmit = event => { event.preventDefault(); submitChat(); if (document.activeElement === sendButton) input.focus({ preventScroll: true }); };
+  input.addEventListener('input', () => { outbox.edited(); if (message.textContent !== CHAT_HOLD_HINT) message.textContent = ''; tick(); });
   input.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault();
+    if (event.key === 'Enter') {
+      // Enter never reaches the form: a disabled send button would swallow it without a word.
+      event.preventDefault();
+      if (!event.isComposing && event.keyCode !== 229 && !event.repeat) submitChat();
+      return;
+    }
     if (event.key === 'Escape' && !event.isComposing) { if (mobile.matches) closeComposer(); else input.blur(); }
   });
   window.addEventListener('keydown', event => {
@@ -214,11 +238,7 @@ export function createSocialUI(options: {
   };
   dialog.querySelector<HTMLButtonElement>('.tool-button')!.onclick = () => dialog.close();
   function receiveChat(chat: ChatMessage, requestId?: string, history = false) {
-    if (chat.playerId === selfId && pendingChat && pendingChat.id === requestId) {
-      if (input.value.trim() === pendingChat.text) input.value = '';
-      clearChatPending(); cooldownUntil = chat.sentAt + 1200; tick();
-      if (mobile.matches && !input.value.trim()) closeComposer();
-    }
+    if (chat.playerId === selfId) outbox.ack(requestId, chat.sentAt);
     appendMessage({ ...chat, channel: undefined }, history);
   }
   function appendMessage(chat: ChatMessage, history = false) {
@@ -227,15 +247,18 @@ export function createSocialUI(options: {
     if (accepted.bubble) options.onBubble(chat);
     if (!accepted.log) return;
     log.querySelector('.chat-empty')?.remove();
-    const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 35;
     const row = document.createElement('p');
     row.className = `chat-line${chat.playerId === selfId ? ' is-self' : ''}`;
     const name = document.createElement('strong'); name.textContent = chat.nickname;
     const text = document.createElement('span'); text.textContent = chat.text;
     row.append(name, text); log.appendChild(row);
     while (log.childElementCount > CHAT_LOG_LIMIT) log.firstElementChild?.remove();
-    updateVisibleRows();
-    if (nearBottom || chat.playerId === selfId) scrollToLatest();
+    if (!preferences.expanded) {
+      // Only the line that just left the visible window needs hiding.
+      const leaving = log.children[log.childElementCount - 1 - CHAT_VISIBLE_LINES.collapsed];
+      if (leaving instanceof HTMLElement && leaving.classList.contains('chat-line')) leaving.hidden = true;
+    }
+    if (pinnedToLatest || chat.playerId === selfId) scrollSoon();
   }
   function receiveActionNotice(value: unknown) {
     if (!isActionNotice(value)) return;
@@ -247,11 +270,7 @@ export function createSocialUI(options: {
   }
   function error(requestId: string | undefined, text: string, retryAt?: number) {
     if (!requestId) return false;
-    if (pendingChat?.id === requestId) {
-      clearChatPending();
-      if (retryAt) cooldownUntil = retryAt;
-      setMessage(text); if (mobile.matches) openComposer(false); tick(); return true;
-    }
+    if (outbox.fail(requestId, text, retryAt)) return true;
     if (pendingSeat?.id === requestId) { clearSeatPending(); options.onSeatError(); setMessage(text); updateSeats(); return true; }
     return false;
   }
@@ -259,15 +278,18 @@ export function createSocialUI(options: {
     selfId = id; connected = live;
     panel.hidden = !id;
     launcher.hidden = !id; launcher.disabled = !live;
-    if (!live) { closeComposer(); clearChatPending(); clearSeatPending(); options.onSeatError(); }
+    if (!live) { closeComposer(); outbox.abandon('연결이 끊겨 보내지 못했어요.'); clearSeatPending(); options.onSeatError(); }
+    else showReturned();
     updateSeats();
   }
   function reset() {
-    setSession(null, false); players = []; feed.clear(); cooldownUntil = 0;
+    setSession(null, false); players = []; feed.clear(); outbox.reset(); returnedUnseen = false;
     input.value = ''; log.replaceChildren(); pinnedToLatest = true; setMessage(''); dialog.close();
   }
   return {
-    setChatEnabled(enabled: boolean) { chatEnabled = enabled; if (!enabled) { closeComposer(); clearChatPending(); } tick(); },
+    setChatEnabled(enabled: boolean) { chatEnabled = enabled; if (!enabled) { closeComposer(); outbox.abandon('관리자가 채팅을 잠시 껐어요.'); } else showReturned(); tick(); },
+    /** Stickers are charged to the same allowance as typed messages. */
+    chatBurst: outbox.burst,
     clearChats() { feed.clear(); log.replaceChildren(Object.assign(document.createElement('p'), { className: 'chat-empty', textContent: '관리자가 최근 대화를 비웠어요.' })); pinnedToLatest = true; },
     setSession, setPlayers(next: PlayerView[]) { players = next; updateSeats(); }, receiveChat, receiveActionNotice, requestSeat, seatState, error, tick, reset, openComposer, closeComposer,
   };

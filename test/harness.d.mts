@@ -17,6 +17,8 @@ export interface FixtureRoom {
  testClock(now:number,runAlarm?:boolean):Promise<FixtureSnapshot>;
  testFinishVote():Promise<FixtureSnapshot>;
  testPositions(points:Record<string,{x:number;z:number}>):Promise<FixtureSnapshot>;
+ /** Puts players in a tower room (null removes them) as the game room lobby would. '*' is every player. */
+ testTowerRoom(ids:string|string[],room?:string|null):Promise<void>;
  testPreviousLayout(points?:Record<string,{x:number;z:number;seat:number|null}>,version?:number|null):Promise<FixtureSnapshot>;
  testMigratePlayers():Promise<FixtureSnapshot>;
  testLegacy(open?:boolean):Promise<void>;

@@ -1,13 +1,16 @@
-import { GAME_CATALOG, gameDefinition, type GameKind, type GameRoomView, type GameSnapshot, type GameProfile } from '../shared/game-room';
+import { GAME_CATEGORIES, gameDefinition, gamesInCategory, isSessionGame, type GameKind, type GameRoomSummary, type GameRoomView, type GameSnapshot, type GameProfile } from '../shared/game-room';
+import { JUMP_RULES, JUMP_ZONES } from '../shared/jump-game';
 import { SHOP_ITEMS, defaultAvatarProfile, type AvatarProfile, type ShopItem } from '../shared/avatar-catalog';
 import { APPEARANCE_OPTIONS, type AvatarAppearance, type AppearanceKey } from '../shared/avatar-appearance';
 import { createGameRoomScene } from './game-room-scene';
 import { gameChoiceSubmission, reconcileGameChoiceDraft, type GameChoiceDraft } from './game-choice-state';
+import { createChatOutbox } from './chat-outbox';
 import './game-hub-ui.css';
 
 type Session = { id: string; nickname: string };
 type Person = Session & { appearance?: AvatarAppearance; color?: number };
 type Tab = 'rooms' | 'shop' | 'inventory';
+type TowerLeader = { nickname: string; bestFloor: number };
 type Options = {
   send: (input: Record<string, unknown>) => boolean;
   now: () => number;
@@ -17,6 +20,8 @@ type Options = {
   onWhisper: (targetId: string) => void;
   onNotify: (message: string) => void;
   onProfile?: (profile: AvatarProfile) => void;
+  /** The member pressed 입장 in a 점프 타워 room. */
+  onTower?: () => void;
 };
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 const points = (value: number) => Math.max(0, Math.trunc(value)).toLocaleString('ko-KR');
@@ -37,6 +42,37 @@ export function createGameHubUI(options: Options) {
   const scroll = root.querySelector<HTMLDivElement>('.gh-scroll')!;
   const status = root.querySelector<HTMLDivElement>('.gh-status')!;
   const connection = root.querySelector<HTMLDivElement>('.gh-connection')!;
+  // The room chat field is one element for the life of the hub. State packets redraw the room
+  // around it, so typing (and a Korean composition) is never interrupted by a redraw.
+  const chatCompose = document.createElement('div'); chatCompose.className = 'gh-chat-compose';
+  chatCompose.innerHTML = '<form class="gh-chat-form"><label class="gh-sr-only" for="game-chat-input">게임방에 보낼 메시지</label><input id="game-chat-input" data-field="chat" maxlength="80" autocomplete="off" enterkeyhint="send"><button type="submit">전송</button></form><p class="gh-chat-note" role="status" hidden></p>';
+  const chatInput = chatCompose.querySelector('input')!, chatSend = chatCompose.querySelector('button')!, chatNote = chatCompose.querySelector('p')!;
+  chatInput.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault(); });
+  chatInput.addEventListener('input', () => outbox.edited());
+  const outbox = createChatOutbox({
+    now: options.now, timeoutMs: 8000, timeoutText: '응답이 늦어지고 있어요. 대화를 확인한 뒤 다시 보내 주세요.',
+    read: () => chatInput.value, write: text => { chatInput.value = text; },
+    status: text => { chatNote.textContent = text; chatNote.hidden = !text; }, changed: () => {},
+  });
+  /** Redraw `live` from `fresh` while the element `keep` (standing where `slot` is in `fresh`) stays in the document. */
+  function redrawAround(live: Element, fresh: Element, keep: Element, slot: Element) {
+    const livePath: Element[] = [], freshPath: Element[] = [];
+    for (let node: Element | null = keep; node && node !== live; node = node.parentElement) livePath.unshift(node);
+    for (let node: Element | null = slot; node && node !== fresh; node = node.parentElement) freshPath.unshift(node);
+    if (!livePath.length || livePath.length !== freshPath.length || livePath.slice(0, -1).some((node, index) => node.tagName !== freshPath[index]!.tagName)) return false;
+    let liveParent = live, freshParent = fresh;
+    livePath.forEach((kept, index) => {
+      const twin = freshPath[index]!, children = [...freshParent.childNodes], at = children.indexOf(twin);
+      for (const child of [...liveParent.childNodes]) if (child !== kept) child.remove();
+      kept.before(...children.slice(0, at)); kept.after(...children.slice(at + 1));
+      if (index < livePath.length - 1) {
+        for (const attribute of [...kept.attributes]) if (!twin.hasAttribute(attribute.name)) kept.removeAttribute(attribute.name);
+        for (const attribute of [...twin.attributes]) if (kept.getAttribute(attribute.name) !== attribute.value) kept.setAttribute(attribute.name, attribute.value);
+      }
+      liveParent = kept; freshParent = twin;
+    });
+    return true;
+  }
   const sceneShell = document.createElement('div'); sceneShell.className = 'gh-scene';
   const sceneHost = document.createElement('div'); sceneHost.className = 'gh-scene-canvas';
   const sceneCaption = document.createElement('span'); sceneCaption.className = 'gh-scene-caption'; sceneCaption.textContent = '같은 테이블, 서로 다른 선택';
@@ -46,13 +82,15 @@ export function createGameHubUI(options: Options) {
   let tab: Tab = 'rooms', shopCategory = 'all', shopQuery = '', shopOwnership = 'all';
   let state: GameSnapshot | null = null;
   let profile: AvatarProfile = defaultAvatarProfile();
-  let draft: GameChoiceDraft & { chat: string } = { key: '', bid: 0, vault: 'invest', cipher: [1, 2, 3], chat: '' };
+  let draft: GameChoiceDraft = { key: '', bid: 0, vault: 'invest', cipher: [1, 2, 3] };
   const pending = new Map<string, { type: string; at: number }>();
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   let previousFocus: HTMLElement | null = null;
   let leaveAction: 'game-exit' | 'game-leave' | null = null, leaveContext = '';
   let leaveReturnFocus: HTMLElement | null = null;
   let renderedView = '';
+  // The tower plays on top of the hub. While it does, the hub neither renders nor takes focus.
+  let covered = false, towerLeaders: TowerLeader[] = [];
   let storeThumbnailCleanup:(()=>void)|undefined,storeThumbnailGeneration=0;
   function stopStoreThumbnails(){++storeThumbnailGeneration;storeThumbnailCleanup?.();storeThumbnailCleanup=undefined;}
   function startStoreThumbnails(){
@@ -95,6 +133,14 @@ export function createGameHubUI(options: Options) {
     if (!options.send({ type, ...data, requestId })) { notify('서버에 연결되지 않았어요. 다시 연결한 뒤 시도해 주세요.'); return false; }
     pending.set(requestId, { type, at: Date.now() }); render(); return true;
   }
+  /** Room chat goes out back to back; an empty allowance keeps the text in the field and says so. */
+  function sendChat(text: string) {
+    if (!session || !connected) { notify('사무실 연결을 확인해 주세요.'); return false; }
+    if (!outbox.ready()) return false;
+    const requestId = outbox.requestId(text, () => crypto.randomUUID());
+    if (!options.send({ type: 'game-chat', text, requestId })) { notify('서버에 연결되지 않았어요. 다시 연결한 뒤 시도해 주세요.'); return false; }
+    outbox.sent(requestId, text); return true;
+  }
   function setOpen(value: boolean) {
     if (opened === value) return;
     opened = value; root.hidden = !value; document.body.classList.toggle('game-hub-open', value);
@@ -124,9 +170,36 @@ export function createGameHubUI(options: Options) {
   function control(label: string, action: string, extra = '', disabled = !canAct(), className = '') {
     return `<button type="button" class="gh-button ${className}" data-command="${action}" ${extra} ${disabled ? 'disabled' : ''}>${label}</button>`;
   }
+  function gameCard(game: ReturnType<typeof gameDefinition>, index: number) {
+    const rules = `<details><summary>게임 규칙 보기</summary><ol>${game.rules.map(rule => `<li>${rule}</li>`).join('')}</ol></details>`;
+    if (game.mode === 'match') return `<article class="gh-game gh-game-${index + 1}"><div class="gh-game-art"><span class="gh-game-number">0${index + 1}</span><span class="gh-game-symbol" aria-hidden="true">${game.icon}</span><small>${game.tag}</small></div><div class="gh-game-copy"><div class="gh-game-meta">${badge(`${game.minPlayers}–${game.maxPlayers}명`)}${badge(`${game.rounds}라운드`)}</div><h3>${game.name}</h3><p class="gh-game-tagline">${game.subtitle}</p><p>${game.description}</p>${rules}<div class="gh-game-buttons">${control('방 만들기', 'create', `data-kind="${game.id}"`, !canAct(), 'gh-primary')}${control('혼자 연습', 'practice', `data-kind="${game.id}"`, !canAct(), 'gh-quiet')}</div></div></article>`;
+    // Session games open a room that anyone may enter at any time: no practice table, no rounds.
+    const best = Math.max(0, Math.min(JUMP_RULES.floors, state?.towerBest ?? 0));
+    const tower = game.id === 'jump-tower' ? `<div class="gh-tower-stats"><div class="gh-tower-best"><small>내 최고 기록</small><strong>${best}<span>F / ${JUMP_RULES.floors}F</span></strong><div class="gh-tower-bar" role="progressbar" aria-label="내 최고 층" aria-valuemin="0" aria-valuemax="${JUMP_RULES.floors}" aria-valuenow="${best}"><i style="width:${best / JUMP_RULES.floors * 100}%"></i></div><p>층마다 +${JUMP_RULES.floorReward} PT · ${JUMP_RULES.floors}층 보너스 +${JUMP_RULES.summitReward} PT</p></div><div class="gh-tower-top"><small>전체 TOP 3 · 최고 도달 층</small><ol>${towerLeaders.length ? towerLeaders.map((leader, rank) => `<li><i>${String(rank + 1).padStart(2, '0')}</i><span>${escape(leader.nickname)}</span><b>${leader.bestFloor}F</b></li>`).join('') : '<li class="gh-tower-top-empty">첫 등반 기록을 기다리고 있어요.</li>'}</ol></div></div>` : '';
+    return `<article class="gh-game gh-game-action"><div class="gh-game-art"><span class="gh-game-number">A${index + 1}</span><span class="gh-game-symbol" aria-hidden="true">${game.icon}</span><small>${game.tag}</small></div><div class="gh-game-copy"><div class="gh-game-meta">${badge(`${game.minPlayers}–${game.maxPlayers}명`)}${game.id === 'jump-tower' ? badge(`${JUMP_RULES.floors}층 · ${JUMP_ZONES.length}구역`) : ''}${badge('상시 입장', 'gh-live')}</div><h3>${game.name}</h3><p class="gh-game-tagline">${game.subtitle}</p><p>${game.description}</p>${tower}${rules}<div class="gh-game-buttons">${control('방 만들기', 'create', `data-kind="${game.id}"`, !canAct(), 'gh-primary')}<span class="gh-game-note">열린 방은 아래 목록에서 바로 참가할 수 있어요.</span></div></div></article>`;
+  }
+  function roomRow(room: GameRoomSummary) {
+    const game = gameDefinition(room.kind), session = game.mode === 'session', full = room.count >= room.maxPlayers;
+    const joinable = !room.practice && !full && (session || room.phase === 'waiting');
+    const label = session ? full ? '정원 마감' : '상시 입장' : phaseText[room.phase];
+    return `<article class="gh-room-row"><div class="gh-room-kind" aria-hidden="true">${game.icon}</div><div class="gh-room-copy"><strong>${escape(game.name)}</strong><small>${room.practice ? '혼자 연습 중' : `방장 ${escape(room.hostName || '—')}`} · ${room.count}/${room.maxPlayers}명</small></div>${badge(label, joinable ? 'gh-live' : '')}${control('참가', 'join', `data-room="${escape(room.id)}" aria-label="${escape(room.hostName)}님의 ${escape(game.name)} 방에 참가"`, !canAct() || !joinable, 'gh-primary')}</article>`;
+  }
   function renderLobby() {
     const rooms = state?.rooms ?? [];
-    return `<section class="gh-intro"><div><span class="gh-kicker">THE LOUNGE OF CHOICES</span><h1>선택이 쌓이면,<br><em>나만의 스타일이 됩니다.</em></h1><p>숨겨진 입찰, 팀의 약속, 작은 단서.<br>같은 테이블에 앉아 서로의 다음 수를 읽어 보세요.</p></div><div class="gh-season-card"><small>나의 플레이 기록</small><strong>${points(profile.matches)}<span>경기</span></strong><div><span>누적 획득</span><b>${points(profile.earned)} PT</b></div><p>게임으로 얻은 포인트는<br>의상 · 이모티콘 · 액션으로 교환해요.</p></div></section><div class="gh-section-title"><h2>오늘의 세 가지 게임</h2><span>개인전 · 팀전 · 추리전</span></div><div class="gh-games">${GAME_CATALOG.map((game, index) => `<article class="gh-game gh-game-${index + 1}"><div class="gh-game-art"><span class="gh-game-number">0${index + 1}</span><span class="gh-game-symbol" aria-hidden="true">${game.icon}</span><small>${['SECRET AUCTION', 'TEAM VAULT', 'SIGNAL CODE'][index]}</small></div><div class="gh-game-copy"><div class="gh-game-meta">${badge(`${game.minPlayers}–${game.maxPlayers}명`)}${badge(`${game.rounds}라운드`)}</div><h3>${game.name}</h3><p class="gh-game-tagline">${game.subtitle}</p><p>${game.description}</p><details><summary>게임 규칙 보기</summary><ol>${game.rules.map(rule => `<li>${rule}</li>`).join('')}</ol></details><div class="gh-game-buttons">${control('방 만들기', 'create', `data-kind="${game.id}"`, !canAct(), 'gh-primary')}${control('혼자 연습', 'practice', `data-kind="${game.id}"`, !canAct(), 'gh-quiet')}</div></div></article>`).join('')}</div><section class="gh-live-rooms"><div class="gh-section-title"><h2>열려 있는 테이블 <span>${rooms.length}</span></h2>${control('새로고침 ↻', 'sync', '', !connected, 'gh-quiet')}</div>${rooms.length ? `<div class="gh-room-list">${rooms.map(room => `<article class="gh-room-row"><div class="gh-room-kind" aria-hidden="true">${gameDefinition(room.kind).icon}</div><div class="gh-room-copy"><strong>${escape(room.name)}</strong><small>${gameDefinition(room.kind).name} · ${room.count}/${room.maxPlayers}명 ${room.practice ? '· 연습' : ''}</small></div>${badge(phaseText[room.phase], room.phase === 'waiting' ? 'gh-live' : '')}${control('입장', 'join', `data-room="${escape(room.id)}"`, !canAct() || room.phase !== 'waiting' || room.count >= room.maxPlayers || room.practice, 'gh-primary')}</article>`).join('')}</div>` : `<div class="gh-empty"><span aria-hidden="true">◈</span><strong>첫 테이블을 열어 보세요.</strong><p>친구와 함께 방에 입장하거나, 연습봇과 규칙을 익힐 수 있어요.</p></div>`}</section><div class="gh-footnote"><span>✦ 포인트는 게임 안에서만 사용됩니다.</span><span>연습 경기에서는 포인트를 받지 않아요.</span></div>`;
+    const shelves = GAME_CATEGORIES.map(category => { const games = gamesInCategory(category.id); return games.length ? `<section class="gh-shelf gh-shelf-${category.id}" data-shelf-target="${category.id}" aria-label="${category.name}"><div class="gh-section-title"><h2>${category.name} <span>${games.length}</span></h2><span>${category.subtitle}</span></div><div class="gh-games">${games.map(gameCard).join('')}</div></section>` : ''; }).join('');
+    // Both shelves are named before anything else, so nobody has to scroll past one to learn the other exists.
+    const jump = (target: string, label: string, count: number) => `<button type="button" class="gh-cat gh-cat-${target}" data-shelf="${target}">${label} <b>${count}</b></button>`;
+    const categories = `<nav class="gh-cats" aria-label="게임 종류로 바로 가기">${GAME_CATEGORIES.map(category => jump(category.id, category.name, gamesInCategory(category.id).length)).join('')}${jump('rooms', '열려 있는 방', rooms.length)}</nav>`;
+    return `${categories}<section class="gh-intro"><div><span class="gh-kicker">THE LOUNGE OF CHOICES</span><h1>선택이 쌓이면,<br> <em>나만의 스타일이 됩니다.</em></h1><p>숨겨진 입찰, 팀의 약속, 작은 단서, 그리고 하늘까지 이어진 발판.<br>방을 만들거나 열린 방에 참가해 함께 즐겨 보세요.</p></div><div class="gh-season-card"><small>나의 플레이 기록</small><strong>${points(profile.matches)}<span>경기</span></strong><div><span>누적 획득</span><b>${points(profile.earned)} PT</b></div><p>게임으로 얻은 포인트는<br>의상 · 이모티콘 · 액션으로 교환해요.</p></div></section>${shelves}<section class="gh-live-rooms" data-shelf-target="rooms"><div class="gh-section-title"><h2>열려 있는 방 <span>${rooms.length}</span></h2>${control('새로고침 ↻', 'sync', '', !connected, 'gh-quiet')}</div>${rooms.length ? `<div class="gh-room-list">${rooms.map(roomRow).join('')}</div>` : `<div class="gh-empty"><span aria-hidden="true">◈</span><strong>첫 방을 열어 보세요.</strong><p>친구와 함께 방에 참가하거나, 연습봇과 전략 게임의 규칙을 익힐 수 있어요.</p></div>`}</section><div class="gh-footnote"><span>✦ 포인트는 게임 안에서만 사용됩니다.</span><span>연습 경기에서는 포인트를 받지 않아요.</span></div>`;
+  }
+  function renderTowerRoom(room: GameRoomView) {
+    const game = gameDefinition(room.kind), host = room.players.find(player => player.id === room.hostId);
+    const climbing = room.players.filter(player => player.connected && player.floor != null).length;
+    const ranked = room.players.slice().sort((a, b) => b.score - a.score || (b.floor ?? -1) - (a.floor ?? -1) || (a.id < b.id ? -1 : 1));
+    const best = Math.max(0, Math.min(JUMP_RULES.floors, state?.towerBest ?? 0));
+    const ranking = `<section class="gh-players-panel"><div class="gh-section-title"><h2>실시간 순위</h2><span>${room.players.length}/${room.maxPlayers}명 · 이번 방 최고 층</span></div><ol class="gh-players gh-tower-rank">${ranked.map((player, index) => `<li class="${player.id === session?.id ? 'gh-me' : ''}"><i class="gh-rank" aria-label="${index + 1}위">${index + 1}</i>${playerIcon(player)}<div><strong>${escape(player.nickname)}${player.id === session?.id ? ' <small>나</small>' : ''}${player.id === room.hostId ? ' <small>방장</small>' : ''}</strong><span>${!player.connected ? '연결 대기' : player.floor != null ? `등반 중 · 지금 ${player.floor > 0 ? `${player.floor}F` : '출발 발판'}` : '방에서 쉬는 중'}</span></div><b>${player.score}<small>F</small></b>${player.id !== session?.id && player.connected ? `<button type="button" class="gh-whisper" data-command="whisper" data-player="${escape(player.id)}" aria-label="${escape(player.nickname)}에게 귓속말">귓속말</button>` : ''}</li>`).join('')}</ol></section>`;
+    const zones = `<ol class="gh-zone-list">${JUMP_ZONES.map(zone => `<li><b>${zone.from}–${zone.to}F</b><span>${escape(zone.name)}</span><small>${escape(zone.pattern)}</small></li>`).join('')}</ol>`;
+    return `<div class="gh-room-heading"><div><span class="gh-kicker">ACTION ROOM · 상시 입장</span><h1>${game.name}</h1><p>${escape(host?.nickname ?? room.hostName)}님의 방 · ${room.players.length}/${room.maxPlayers}명</p></div>${control('방 나가기', 'leave', '', !connected, 'gh-quiet')}</div><div class="gh-room-layout"><main class="gh-main-table"><section class="gh-board gh-tower-board"><div class="gh-tower-hero"><span class="gh-tower-mark" aria-hidden="true">${game.icon}</span><div><span class="gh-kicker">${JUMP_RULES.floors} FLOORS · ${JUMP_ZONES.length} ZONES</span><h2>준비되면 바로 올라가요.</h2><p>준비 확인도 라운드도 없어요. 이 방 사람들끼리만 타워 안에서 서로 보이고 대화합니다. ${climbing ? `지금 <b>${climbing}명</b>이 오르는 중이에요.` : '아직 아무도 오르지 않았어요.'}</p></div></div><dl class="gh-tower-facts"><div><dt>내 전체 최고</dt><dd>${best}<small>F</small></dd></div><div><dt>층마다</dt><dd>+${JUMP_RULES.floorReward}<small>PT</small></dd></div><div><dt>${JUMP_RULES.floors}층 보너스</dt><dd>+${JUMP_RULES.summitReward}<small>PT</small></dd></div><div><dt>떨어지면</dt><dd>1<small>층부터</small></dd></div></dl>${control('타워 입장 →', 'tower-enter', '', !canAct(), 'gh-primary gh-submit-choice')}<p class="gh-choice-help">체크포인트는 없어요. 아래 발판에 내려앉으면 거기서 이어 가고, 허공으로 떨어지면 1층부터 다시 시작합니다. 받은 포인트와 최고 기록은 그대로 남아요. 타워에서 나오면 이 방으로 돌아옵니다.</p></section><details class="gh-rules"><summary>구역 안내 · 포인트 규칙</summary>${zones}<ol>${game.rules.map(rule => `<li>${rule}</li>`).join('')}</ol></details></main><aside>${ranking}${roomChat(room)}</aside></div>`;
   }
   function playerIcon(player: { appearance?: AvatarAppearance; nickname: string }) {
     const species = player.appearance?.species ?? 'human';
@@ -146,7 +219,7 @@ export function createGameHubUI(options: Options) {
   function roomChat(room: GameRoomView) {
     const chats = room.chats ?? [];
     const emotes = SHOP_ITEMS.filter(item => item.category === 'emoji' && profile.owned.includes(item.id));
-    return `<section class="gh-chat"><div class="gh-section-title"><h2>테이블 대화</h2><span>같은 방에만 보여요</span></div><div class="gh-chat-lines" role="log" aria-label="게임방 대화">${chats.length ? chats.slice(-10).map(chat => `<p><strong>${escape(chat.nickname)}</strong><span>${escape(chat.text)}</span></p>`).join('') : '<p class="gh-chat-empty">함께 인사하고 작전을 이야기해 보세요.</p>'}</div><form class="gh-chat-form"><label class="gh-sr-only" for="game-chat-input">게임방에 보낼 메시지</label><input id="game-chat-input" data-field="chat" maxlength="80" autocomplete="off" value="${escape(draft.chat)}" placeholder="테이블 대화 · 80자" ${!connected ? 'disabled' : ''}><button type="submit" ${!connected ? 'disabled' : ''}>전송</button></form>${emotes.length ? `<div class="gh-chat-emotes" aria-label="내 채팅 이모티콘">${emotes.map(item => `<button type="button" data-command="chat-emote" data-item="${item.id}" title="${escape(item.name)} 보내기" aria-label="${escape(item.name)} 보내기" ${!connected ? 'disabled' : ''}>${item.icon}</button>`).join('')}</div>` : ''}<p class="gh-private-note">비공개 대화는 참가자 옆 ‘귓속말’을 이용하세요.</p></section>`;
+    return `<section class="gh-chat"><div class="gh-section-title"><h2>${isSessionGame(room.kind) ? '방 대화' : '테이블 대화'}</h2><span>같은 방에만 보여요</span></div><div class="gh-chat-lines" role="log" aria-label="게임방 대화">${chats.length ? chats.slice(-10).map(chat => `<p><strong>${escape(chat.nickname)}</strong><span>${escape(chat.text)}</span></p>`).join('') : '<p class="gh-chat-empty">함께 인사하고 작전을 이야기해 보세요.</p>'}</div><div class="gh-chat-slot"></div>${emotes.length ? `<div class="gh-chat-emotes" aria-label="내 채팅 이모티콘">${emotes.map(item => `<button type="button" data-command="chat-emote" data-item="${item.id}" title="${escape(item.name)} 보내기" aria-label="${escape(item.name)} 보내기" ${!connected ? 'disabled' : ''}>${item.icon}</button>`).join('')}</div>` : ''}<p class="gh-private-note">비공개 대화는 참가자 옆 ‘귓속말’을 이용하세요.</p></section>`;
   }
   function renderWaiting(room: GameRoomView) {
     const game = gameDefinition(room.kind), own = room.players.find(player => player.id === session?.id);
@@ -157,7 +230,7 @@ export function createGameHubUI(options: Options) {
   function renderChoice(room: GameRoomView) {
     const own = room.players.find(player => player.id === session?.id), submitted = room.myChoice !== null || !!own?.submitted;
     const disabled = !canAct() || room.phase !== 'playing' || submitted || !!own?.solved || !!own?.forfeited;
-    draft = { ...reconcileGameChoiceDraft(room, draft, session?.id), chat: draft.chat };
+    draft = reconcileGameChoiceDraft(room, draft, session?.id);
     const choiceLabel = submitted ? '선택을 제출했어요. 모두의 선택을 기다립니다.' : own?.solved ? '암호를 풀었어요! 남은 참가자의 추리를 지켜보세요.' : '내 선택은 라운드가 끝날 때까지 비공개예요.';
     let body = '';
     if (room.kind === 'blind-auction') {
@@ -178,6 +251,7 @@ export function createGameHubUI(options: Options) {
     return `<div class="gh-finished"><span class="gh-kicker">THE FINAL SCORE</span><h2>이번 테이블의 결과</h2>${room.finishReason ? `<p>${escape(room.finishReason)}</p>` : ''}${room.secret ? `<p class="gh-answer">공개된 암호 <b>${room.secret.join(' · ')}</b></p>` : ''}<div class="gh-results"><div class="gh-result-heading"><span>순위 · 참가자</span><span>경기 점수</span><span>획득 PT</span></div>${room.results.map(row => `<div class="gh-result-row ${row.playerId === session?.id ? 'gh-me' : ''}"><span><b>${row.rank}</b>${escape(row.nickname)}${row.forfeited ? '<small>중도 퇴장</small>' : ''}</span><strong>${row.score}</strong><strong class="gh-reward">+${row.reward}</strong></div>`).join('')}</div><p>${room.practice ? '연습 경기는 포인트가 지급되지 않아요. 다른 참가자와 실제 경기를 해보세요.' : '상점 포인트는 서버가 경기 종료 후 지급합니다. 같은 경기의 보상은 한 번만 받을 수 있어요.'}</p><div class="gh-ready-buttons">${room.hostId === session?.id ? control('같은 사람들과 다시 준비', 'rematch', '', !canAct(), 'gh-primary') : '<span>방장이 다음 경기를 열 수 있어요.</span>'}${control('포인트 상점 보기', 'shop', '', false, 'gh-quiet')}</div></div>`;
   }
   function renderRoom(room: GameRoomView) {
+    if (isSessionGame(room.kind)) return renderTowerRoom(room);
     const game = gameDefinition(room.kind);
     return `<div class="gh-room-heading"><div><span class="gh-kicker">${room.practice ? 'PRACTICE TABLE · 포인트 없음' : 'LIVE TABLE'}</span><h1>${game.name}</h1><p>${game.subtitle}</p></div>${control(room.phase === 'playing' || room.phase === 'reveal' ? '게임에서 나가기' : '테이블 나가기', 'leave', '', !connected, 'gh-quiet')}</div><div class="gh-room-layout"><main class="gh-main-table"><div class="gh-table-scene-slot"></div><section class="gh-board">${room.phase === 'waiting' ? renderWaiting(room) : room.phase === 'playing' ? renderChoice(room) : room.phase === 'reveal' ? renderReveal(room) : renderFinished(room)}</section>${ruleDetails(room)}${roundHistory(room)}</main><aside>${playerList(room)}${roomChat(room)}</aside></div>`;
   }
@@ -198,9 +272,12 @@ export function createGameHubUI(options: Options) {
     }).join('')}</div>` : `<div class="gh-empty"><span aria-hidden="true">✦</span><strong>${ownedOnly&&!available.length?'아직 모은 아이템이 없어요.':'조건에 맞는 아이템이 없어요.'}</strong><p>${ownedOnly&&!available.length?'게임을 플레이해 포인트를 얻고, 마음에 드는 아이템을 골라 보세요.':'검색어나 분류를 바꿔 다른 아이템도 살펴보세요.'}</p>${control(ownedOnly&&!available.length?'포인트 상점 둘러보기':'검색 조건 초기화',ownedOnly&&!available.length?'shop':'store-reset','',false,'gh-primary')}</div>`}<div class="gh-footnote"><span>PT는 현금 충전·환전·송금할 수 없는 게임 포인트입니다.</span><span>구매한 아이템은 같은 브라우저의 참가자 정보에 저장됩니다.</span></div>`;
   }
   function render() {
-    if (disposed || !opened) return;
+    if (disposed || !opened || covered) return;
     const focused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement ? document.activeElement : null;
     const focusedField = focused?.dataset.field;
+    // A state packet rebuilds the content; a keyboard user keeps their place on the same control.
+    const focusedButton = document.activeElement instanceof HTMLButtonElement && content.contains(document.activeElement) ? document.activeElement : null;
+    const focusedControl = focusedButton?.dataset.command ? `button[data-command="${focusedButton.dataset.command}"]${focusedButton.dataset.kind ? `[data-kind="${focusedButton.dataset.kind}"]` : ''}${focusedButton.dataset.room ? `[data-room="${CSS.escape(focusedButton.dataset.room)}"]` : ''}${focusedButton.dataset.player ? `[data-player="${CSS.escape(focusedButton.dataset.player)}"]` : ''}${focusedButton.dataset.item ? `[data-item="${CSS.escape(focusedButton.dataset.item)}"]` : ''}` : '';
     const selection = focused instanceof HTMLInputElement ? focused.selectionStart : null;
     const oldScroll = scroll.scrollTop;
     const view = `${tab}:${state?.room?.id ?? 'lobby'}:${state?.room?.matchId ?? ''}`;
@@ -215,7 +292,16 @@ export function createGameHubUI(options: Options) {
     connection.hidden = connected;
     connection.textContent = session ? '연결을 복구하고 있어요. 다시 연결되면 현재 게임으로 돌아옵니다.' : '사무실에 입장한 뒤 게임룸을 이용해 주세요.';
     stopStoreThumbnails();
-    content.innerHTML = tab === 'rooms' ? state?.room ? renderRoom(state.room) : renderLobby() : renderStore(tab === 'inventory');
+    const html = tab === 'rooms' ? state?.room ? renderRoom(state.room) : renderLobby() : renderStore(tab === 'inventory');
+    chatInput.disabled = chatSend.disabled = !connected;
+    if (state?.room) chatInput.placeholder = `${isSessionGame(state.room.kind) ? '방 대화' : '테이블 대화'} · 80자`;
+    let redrawn = false;
+    if (document.activeElement === chatInput && content.contains(chatCompose)) {
+      const fresh = document.createElement('div'); fresh.innerHTML = html;
+      const slot = fresh.querySelector('.gh-chat-slot');
+      redrawn = !!slot && redrawAround(content, fresh, chatCompose, slot);
+    }
+    if (!redrawn) { chatCompose.remove(); content.innerHTML = html; content.querySelector('.gh-chat-slot')?.replaceWith(chatCompose); }
     if (tab !== 'rooms' && state?.room && ['playing', 'reveal'].includes(state.room.phase)) {
       const activeGame = document.createElement('div'); activeGame.className = 'gh-active-game';
       activeGame.innerHTML = `<span><b>${gameDefinition(state.room.kind).name}</b> 경기 진행 중 · <strong data-deadline="${state.room.deadline ?? 0}">—</strong></span><button type="button" data-tab="rooms">테이블로 돌아가기 →</button>`;
@@ -233,10 +319,11 @@ export function createGameHubUI(options: Options) {
       tableScene?.update(state.room.players.map(player => ({...player, appearance: player.appearance ?? people.find(person => person.id === player.id)?.appearance })));
     } else tableScene?.setActive(false);
     scroll.scrollTop = oldScroll;
-    if (focusedField) {
+    if (focusedField && document.activeElement !== chatInput) {
       const next = content.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-field="${focusedField}"]`);
       if (next && !next.disabled) { next.focus({ preventScroll: true }); if (next instanceof HTMLInputElement && selection !== null) next.setSelectionRange(selection, selection); }
     }
+    if (focusedControl) content.querySelector<HTMLButtonElement>(focusedControl)?.focus({ preventScroll: true });
     const chatLines = content.querySelector('.gh-chat-lines'); if (chatLines) chatLines.scrollTop = chatLines.scrollHeight;
     startStoreThumbnails();
     tick();
@@ -259,6 +346,7 @@ export function createGameHubUI(options: Options) {
     if (!target || target.disabled) return;
     if (target.dataset.tab) { tab = target.dataset.tab as Tab; resetStoreFilters(); scroll.scrollTop = 0; render(); return; }
     if (target.dataset.category) { shopCategory = target.dataset.category; render(); return; }
+    if (target.dataset.shelf) { content.querySelector<HTMLElement>(`[data-shelf-target="${target.dataset.shelf}"]`)?.scrollIntoView({ block: 'start' }); return; }
     if (target.dataset.bid !== undefined) { draft.bid = Number(target.dataset.bid); render(); return; }
     if (target.dataset.vault && ['invest', 'guard', 'steal'].includes(target.dataset.vault)) { draft.vault = target.dataset.vault as GameChoiceDraft['vault']; render(); return; }
     const action = target.dataset.command;
@@ -272,6 +360,7 @@ export function createGameHubUI(options: Options) {
     if (action === 'sync') { command('game-enter'); return; }
     if (action === 'create' || action === 'practice') { command('game-create', { kind: target.dataset.kind as GameKind, practice: action === 'practice' }); return; }
     if (action === 'join') { command('game-join', { roomId: target.dataset.room }); return; }
+    if (action === 'tower-enter') { if (state?.room && isSessionGame(state.room.kind) && canAct()) options.onTower?.(); return; }
     if (action === 'leave') {
       requestDeparture('game-leave'); return;
     }
@@ -285,7 +374,7 @@ export function createGameHubUI(options: Options) {
     }
     if (action === 'chat-emote' && state?.room) {
       const item = SHOP_ITEMS.find(item => item.id === target.dataset.item);
-      if (item?.emoji && profile.owned.includes(item.id) && ![...pending.values()].some(value => value.type === 'game-chat')) command('game-chat', { text: item.emoji });
+      if (item?.emoji && profile.owned.includes(item.id)) sendChat(item.emoji);
       return;
     }
     if (action === 'buy') { command('shop-buy', { itemId: target.dataset.item }); return; }
@@ -297,7 +386,6 @@ export function createGameHubUI(options: Options) {
   root.addEventListener('input', event => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
-    if (target.dataset.field === 'chat') draft.chat = target.value;
     if (target.dataset.field === 'shop-search') { shopQuery=target.value;if(!(event instanceof InputEvent)||!event.isComposing)render(); }
   });
   root.addEventListener('compositionend',event=>{const target=event.target;if(target instanceof HTMLInputElement&&target.dataset.field==='shop-search'){shopQuery=target.value;render();}});
@@ -309,16 +397,22 @@ export function createGameHubUI(options: Options) {
   });
   root.addEventListener('submit', event => {
     if (!(event.target instanceof HTMLFormElement) || !event.target.classList.contains('gh-chat-form')) return;
-    event.preventDefault(); if (!draft.chat.trim() || [...pending.values()].some(value => value.type === 'game-chat')) return;
-    if (command('game-chat', { text: draft.chat.trim() })) { draft.chat = ''; render(); }
+    event.preventDefault(); const text = chatInput.value.trim();
+    // The field is free at once: the next message does not wait for this one's state packet.
+    if (text && sendChat(text)) chatInput.value = '';
+    if (document.activeElement === chatSend) chatInput.focus({ preventScroll: true });
   });
   return {
-    setSession(value: Session | null) { session = value; if (!value) { pending.clear(); state = null; setOpen(false); } render(); },
+    setSession(value: Session | null) { session = value; if (!value) { pending.clear(); outbox.reset(); chatInput.value = ''; chatNote.hidden = true; state = null; setOpen(false); } render(); },
     setPlayers(value: Person[]) { people = value; if (opened && tab === 'rooms' && state?.room) tableScene?.update(state.room.players.map(player => ({ ...player, appearance: player.appearance ?? people.find(person => person.id === player.id)?.appearance }))); },
-    setConnected(value: boolean) { connected = value; if (!value) pending.clear(); render(); },
+    setConnected(value: boolean) { connected = value; if (!value) { pending.clear(); outbox.abandon('연결이 끊겨 보내지 못했어요.'); } render(); },
     setProfile(value: AvatarProfile) { profile = value; render(); },
+    setTowerLeaders(value: TowerLeader[]) { const next = value.slice(0, 3); if (JSON.stringify(next) === JSON.stringify(towerLeaders)) return; towerLeaders = next; if (tab === 'rooms' && !state?.room) render(); },
+    /** The tower is drawn above the hub; the hub stays open underneath so leaving the tower lands in the room view. */
+    setCovered(value: boolean) { if (covered === value) return; covered = value; root.inert = value; if (value) tableScene?.setActive(false); else { renderedView = ''; render(); if (opened) (root.querySelector<HTMLButtonElement>('[data-command="tower-enter"]:not(:disabled)') ?? root.querySelector<HTMLButtonElement>('.gh-office'))?.focus({ preventScroll: true }); } },
     setWhisperUnread(value: number) { const count = root.querySelector<HTMLElement>('[data-whisper-count]')!; count.hidden = value <= 0; count.textContent = value > 99 ? '99+' : String(value); },
     receive(packet: Record<string, unknown>) {
+      if (packet.type === 'error' && outbox.fail(packet.requestId, typeof packet.message === 'string' ? packet.message : '메시지를 보내지 못했어요.', packet.retryAt)) return true;
       if (packet.type === 'error' && typeof packet.requestId === 'string' && pending.has(packet.requestId)) {
         pending.delete(packet.requestId); notify(typeof packet.message === 'string' ? packet.message : '요청을 처리하지 못했어요.'); render(); return true;
       }
@@ -326,9 +420,9 @@ export function createGameHubUI(options: Options) {
       const previous = state;
       state = packet.state as GameSnapshot; profile = state.profile;
       if (leaveDialog.open && (!state.room || `${state.room.id}:${state.room.matchId}` !== leaveContext)) leaveDialog.close();
-      if (typeof packet.requestId === 'string') pending.delete(packet.requestId);
+      if (typeof packet.requestId === 'string') { pending.delete(packet.requestId); outbox.ack(packet.requestId, state.room?.chats?.filter(chat => chat.playerId === session?.id).at(-1)?.sentAt); }
       options.onProfile?.(profile);
-      if ((state.room?.id ?? null) !== (previous?.room?.id ?? null)) { tab = 'rooms'; draft.chat = ''; scroll.scrollTop = 0; }
+      if ((state.room?.id ?? null) !== (previous?.room?.id ?? null)) { tab = 'rooms'; outbox.settle(); chatInput.value = ''; chatNote.hidden = true; scroll.scrollTop = 0; }
       if (state.area === 'games') setOpen(true); else setOpen(false);
       render(); return true;
     },
@@ -336,6 +430,6 @@ export function createGameHubUI(options: Options) {
     openShop() { if (!session) { notify('먼저 닉네임과 캐릭터를 정해 사무실에 입장해 주세요.'); return; } tab = 'shop'; resetStoreFilters(); scroll.scrollTop = 0; setOpen(true); command('game-enter'); },
     close() { setOpen(false); },
     isOpen: () => opened,
-    dispose() { disposed = true; stopStoreThumbnails();clearInterval(timer); clearTimeout(statusTimer); tableScene?.dispose(); leaveDialog.close(); leaveDialog.remove(); root.remove(); document.body.classList.remove('game-hub-open'); },
+    dispose() { disposed = true; outbox.reset(); stopStoreThumbnails();clearInterval(timer); clearTimeout(statusTimer); tableScene?.dispose(); leaveDialog.close(); leaveDialog.remove(); root.remove(); document.body.classList.remove('game-hub-open'); },
   };
 }

@@ -67,7 +67,7 @@ export function createMobileShell(options: ShellOptions) {
   const admissionDialog = createSheet('mobile-admission-dialog', '사무실 입장');
   const admissionHint = document.createElement('p');
   admissionHint.className = 'mobile-admission-hint';
-  admissionHint.textContent = '닉네임으로 입장하면 내 캐릭터가 생기고, 방향 버튼으로 걸어 다닐 수 있어요.';
+  admissionHint.textContent = '닉네임으로 입장하면 내 캐릭터가 생기고, 조이스틱으로 걸어 다닐 수 있어요.';
   admissionDialog.querySelector('.mobile-sheet-body')!.prepend(admissionHint);
   const marketDialog = createSheet('mobile-market-dialog', '공유 차트·안내');
   const toolsDialog = createSheet('mobile-tools-dialog', '사무실 도구');

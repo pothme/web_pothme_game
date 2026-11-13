@@ -14,7 +14,7 @@ import { createOfficeOcclusion } from './office-occlusion';
 import { createOfficeAvatar, replaceOfficeAvatarAppearance, type OfficeAvatar } from './office-avatar';
 import { appearanceKey, normalizeAvatarAppearance, type AvatarAppearance } from '../shared/avatar-appearance';
 import { AVATAR_BODY_SCALE_Y, AVATAR_HAND_LOCAL_Y, AVATAR_SEATED_Y } from '../shared/avatar-rig';
-import { createAvatarNameLabel } from './avatar-name-label';
+import { avatarLabelY, createAvatarNameLabel, placeAvatarNameLabel } from './avatar-name-label';
 import type { StockProfile } from '../shared/stock-profile';
 import type { AvatarActionView } from '../shared/avatar-actions';
 import { poseOfficeAvatar, poseOfficeShoulderLink, avatarJumpHeight, avatarConsumeWeight } from './office-avatar-pose';
@@ -37,6 +37,7 @@ type Callbacks = {
 };
 type RefreshmentTray = { group: THREE.Group; drink: THREE.Group; snack: THREE.Group; drinkRest: THREE.Vector3; snackRest: THREE.Vector3 };
 type Avatar = {
+  blob: THREE.Mesh;
   group: THREE.Group;
   model: OfficeAvatar;
   action: PlayerView['action'];
@@ -546,7 +547,9 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   const refreshmentHit = new THREE.Mesh(new THREE.BoxGeometry(station.width + 0.5, 3.6, station.depth + 0.3), new THREE.MeshBasicMaterial({ visible: false }));
   refreshmentHit.position.set(station.x, 1.8, station.z); refreshmentHit.userData.refreshments = true; room.add(refreshmentHit);
   const jumpPortal = createJumpPortal(); room.add(jumpPortal.group);
-  const jumpInteract = document.createElement('button'); jumpInteract.type='button'; jumpInteract.className='pantry-interact'; jumpInteract.hidden=true; jumpInteract.textContent='↟ 점프 타워 입장 · E'; jumpInteract.onclick=()=>approachJumpPortal(); container.append(jumpInteract);
+  // A touch screen has no E key to press: the prompt itself is the button.
+  const jumpPromptText = matchMedia('(pointer:coarse)').matches ? '♟ 게임룸 입장' : '♟ 게임룸 입장 · E';
+  const jumpInteract = document.createElement('button'); jumpInteract.type='button'; jumpInteract.className='pantry-interact'; jumpInteract.hidden=true; jumpInteract.textContent=jumpPromptText; jumpInteract.onclick=()=>approachJumpPortal(); container.append(jumpInteract);
   const pantryInteract=document.createElement('button');
   pantryInteract.type='button'; pantryInteract.className='pantry-interact'; pantryInteract.hidden=true;
   pantryInteract.textContent='☕ 스낵바 이용 · E'; pantryInteract.setAttribute('aria-label','가까운 스낵바에서 음료와 간식 고르기');
@@ -591,17 +594,36 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   // their normal transform updates; the large architecture need not repeat it.
   freezeOfficeArchitecture(room);
 
-  function createAvatar(nickname: string, color: number, mine: boolean, stockProfile: StockProfile | null, appearance: AvatarAppearance): Avatar {
-    const model = createOfficeAvatar(color, appearance);
+  // The room's one shadow map spans the whole office, so a figure's cast shadow
+  // is a soft smear. A shared blob (one texture, one material, one extra draw
+  // per visitor) pins each character to the floor; other visitors' invisible
+  // selection rings are no longer drawn, so the draw count does not grow.
+  const blobCanvas = document.createElement('canvas'); blobCanvas.width = blobCanvas.height = 64;
+  const blobContext = blobCanvas.getContext('2d')!, blobGradient = blobContext.createRadialGradient(32, 32, 2, 32, 32, 31);
+  blobGradient.addColorStop(0, 'rgba(255,255,255,1)'); blobGradient.addColorStop(.55, 'rgba(255,255,255,.55)'); blobGradient.addColorStop(1, 'rgba(255,255,255,0)');
+  blobContext.fillStyle = blobGradient; blobContext.fillRect(0, 0, 64, 64);
+  const blobTexture = new THREE.CanvasTexture(blobCanvas), blobGeometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  // The blob lies 3 mm above the floor. From the far end of the free camera
+  // that is less than one depth step, so it is pulled forward in depth instead.
+  const blobMaterial = new THREE.MeshBasicMaterial({ map: blobTexture, color: 0x16222f, transparent: true, opacity: .34, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const BLOB_WIDTH = .84, BLOB_DEPTH = .66, BLOB_Y = .018;
+  function createAvatar(nickname: string, color: number, mine: boolean, stockProfile: StockProfile | null, appearance: AvatarAppearance, seed?: string): Avatar {
+    const model = createOfficeAvatar(color, appearance, seed);
     const {group, arms, legs, lowerLegs} = model;
-    const label = createAvatarNameLabel(nickname, mine, stockProfile); group.add(label);
+    const label = createAvatarNameLabel(nickname, mine, stockProfile, avatarLabelY(model)); group.add(label);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.4, 32), new THREE.MeshBasicMaterial({ color: 0x73b8eb, transparent: true, opacity: mine ? 0.8 : 0, side: THREE.DoubleSide, depthWrite: false }));
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.025; group.add(ring);
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.025; ring.visible = mine; group.add(ring);
+    const blob = new THREE.Mesh(blobGeometry, blobMaterial); blob.position.y = BLOB_Y; blob.scale.set(BLOB_WIDTH, 1, BLOB_DEPTH); group.add(blob);
     const tray = new THREE.Group(); tray.position.set(0, 0.86 * AVATAR_BODY_SCALE_Y, 0.4 * AVATAR_BODY_SCALE_Y); tray.visible = false; group.add(tray);
     group.rotation.y = 0.58; room.add(group);
-    return { group, model, action: null, shoulder: null, shoulderLocallyLeft: false, target: new THREE.Vector3(), arms, legs, lowerLegs, label, ring, nickname, stockProfile, color, appearance, seat: null, bubble: null, disconnected: false, refreshments: null, tray, trayContent: null };
+    return { blob, group, model, action: null, shoulder: null, shoulderLocallyLeft: false, target: new THREE.Vector3(), arms, legs, lowerLegs, label, ring, nickname, stockProfile, color, appearance, seat: null, bubble: null, disconnected: false, refreshments: null, tray, trayContent: null };
   }
   const avatars = new Map<string, Avatar>();
+  // Building a figure takes a few milliseconds on a desktop and tens on a
+  // phone. A full room arriving at once is therefore spread over frames: mine
+  // at once, the others a couple per frame, nearest first. Until its turn a
+  // visitor is only the latest roster entry, kept up to date by the deltas.
+  const pendingPlayers = new Map<string, PlayerView>();
   const latestChats = new Map<string, ChatMessageView>();
   let selfId: string | null = null;
   // Input prediction uses a monotonic clock, independently of network clock updates.
@@ -642,6 +664,8 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   let communityPresetActive = false;
   const keys = new Set<string>();
   const touchKeys = new Set<string>();
+  /** Analog stick input in screen space: x right, z toward the viewer; length 0..1. */
+  const touchStick = { x: 0, z: 0 };
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const marker = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.2, 32), new THREE.MeshBasicMaterial({ color: 0x95d8dc, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
@@ -650,7 +674,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   seatHighlight.rotation.x = -Math.PI / 2; seatHighlight.visible = false; room.add(seatHighlight);
 
   function clearMovement() {
-    keys.clear(); touchKeys.clear(); path = []; dirtyPosition = false; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false;
+    keys.clear(); touchKeys.clear(); touchStick.x = touchStick.z = 0; path = []; dirtyPosition = false; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false;
   }
   function prepareShoulderLink() {
     const self = selfId ? avatars.get(selfId) : undefined;
@@ -670,6 +694,14 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     self.target.copy(self.group.position);
     path = []; dirtyPosition = false; marker.visible = false; lastSent = performance.now();
     trackSelf();
+  }
+  function setMoveStick(x: number, z: number) {
+    const length = Number.isFinite(x) && Number.isFinite(z) ? Math.hypot(x, z) : 0;
+    if (length < .01) { touchStick.x = touchStick.z = 0; return; }
+    if (!renderingActive || document.hidden || !selfId || modalOpen() || focusedInput(document.activeElement) || pendingSeatAction?.kind === 'sit' || pendingSeatAction?.kind === 'external') { touchStick.x = touchStick.z = 0; return; }
+    if (avatars.get(selfId)?.seat !== null) requestStand();
+    const scale = length > 1 ? 1 / length : 1;
+    touchStick.x = x * scale; touchStick.z = z * scale; path = []; approachingRefreshments = false; approachingJumpPortal = false;
   }
   function setMoveInput(direction: 'forward' | 'back' | 'left' | 'right', pressed: boolean) {
     const key = { forward: 'w', back: 's', left: 'a', right: 'd' }[direction];
@@ -738,7 +770,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     const self=selfId?avatars.get(selfId):undefined;
     const portalNear=!!self&&self.seat===null&&nearJumpPortal(self.group.position.x,self.group.position.z);
     jumpInteract.hidden=!renderingActive||view!=='room'||callbacks.isConnected?.()===false||modalOpen()||(!portalNear&&!approachingJumpPortal);
-    jumpInteract.textContent=approachingJumpPortal?'점프 타워로 이동 중':'↟ 점프 타워 입장 · E';
+    jumpInteract.textContent=approachingJumpPortal?'게임룸 입구로 이동 중':jumpPromptText;
     const near=!!self&&self.seat===null&&Math.hypot(self.group.position.x-station.x,self.group.position.z-station.z)<=station.interactionRadius-.1;
     const hidden=!renderingActive||view!=='room'||callbacks.isConnected?.()===false||modalOpen()||(!near&&!approachingRefreshments);
     if(pantryInteract.hidden!==hidden)pantryInteract.hidden=hidden;
@@ -803,11 +835,11 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     avatar.group.remove(avatar.label);
     avatar.label.material.map?.dispose(); avatar.label.material.dispose();
     const displayName = avatar.disconnected ? `${avatar.nickname} (자리 비움)` : avatar.nickname;
-    avatar.label = createAvatarNameLabel(displayName, mine, avatar.stockProfile);
+    avatar.label = createAvatarNameLabel(displayName, mine, avatar.stockProfile, avatarLabelY(avatar.model));
     avatar.group.add(avatar.label);
     const ring = avatar.ring.material as THREE.MeshBasicMaterial;
     ring.color.set(0x73b8eb);
-    ring.opacity = mine ? 0.8 : 0;
+    ring.opacity = mine ? 0.8 : 0; avatar.ring.visible = mine;
   }
   function setSelfId(id: string | null) {
     selfJumpPrediction = undefined;
@@ -830,89 +862,127 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     for (const [id, avatar] of avatars) {
       if (!ids.has(id)) { removeBubble(avatar); room.remove(avatar.group); disposeObject(avatar.tray); avatar.label.material.map?.dispose(); avatar.label.material.dispose(); avatar.ring.geometry.dispose(); (avatar.ring.material as THREE.Material).dispose(); avatar.model.dispose(); avatars.delete(id); }
     }
+    for (const id of pendingPlayers.keys()) if (!ids.has(id)) pendingPlayers.delete(id);
     for (const player of players) {
       if (!Number.isFinite(player.x) || !Number.isFinite(player.z)) continue;
-      let avatar = avatars.get(player.id);
-      const color = Number.isFinite(player.color) && player.color > 255 ? player.color : PALETTE[Math.abs(player.color || 0) % PALETTE.length];
-      const appearance = normalizeAvatarAppearance(player.appearance, color);
-      if (!avatar) {
-        avatar = createAvatar(player.nickname, color, player.id === selfId, player.stockProfile ?? null, appearance);
-        avatar.group.position.set(THREE.MathUtils.clamp(player.x, BOUNDS.minX, BOUNDS.maxX), 0, THREE.MathUtils.clamp(player.z, BOUNDS.minZ, BOUNDS.maxZ));
-        avatars.set(player.id, avatar);
-      } else if (color !== avatar.color || appearanceKey(appearance) !== appearanceKey(avatar.appearance)) {
-        // Keep the root, local prediction target, held items and seated pose.
-        // A clothing update must not act like a reconnect/position correction.
-        avatar.model = replaceOfficeAvatarAppearance(avatar.model, color, appearance);
-        avatar.arms = avatar.model.arms; avatar.legs = avatar.model.legs; avatar.lowerLegs = avatar.model.lowerLegs;
-        avatar.color = color; avatar.appearance = appearance;
-      }
-      // An ordinary emote sent before the jump can still arrive in a late roster.
-      // Do not revive that interrupted gesture after the local flight lands.
-      avatar.action = player.id === selfId && selfJumpPrediction !== undefined && player.action?.kind !== 'jump' ? null : player.action ?? null;
-      avatar.shoulder = player.shoulder ?? null;
-      if (!avatar.shoulder) avatar.shoulderLocallyLeft = false;
-      const disconnected = player.disconnected === true;
-      const selection = isRefreshmentSelection(player.refreshments) ? player.refreshments : null;
-      if (avatar.refreshments?.drink !== selection?.drink || avatar.refreshments?.snack !== selection?.snack) {
-        for (const child of [...avatar.tray.children]) { disposeObject(child); child.removeFromParent(); }
-        avatar.trayContent = selection ? refreshmentTray(selection) : null;
-        if (avatar.trayContent) avatar.tray.add(avatar.trayContent.group);
-        avatar.refreshments = selection ? { ...selection } : null; avatar.tray.visible = !!selection;
-      }
-      const stockProfile = player.stockProfile ?? null;
-      const labelChanged = avatar.nickname !== player.nickname || avatar.disconnected !== disconnected || avatar.stockProfile?.stock !== stockProfile?.stock || avatar.stockProfile?.average !== stockProfile?.average || avatar.stockProfile?.currency !== stockProfile?.currency;
-      avatar.stockProfile = stockProfile;
-      avatar.disconnected = disconnected;
-      if (labelChanged) { avatar.nickname = player.nickname; refreshAvatarLabel(avatar, player.id === selfId); }
-      const seat = Number.isInteger(player.seat) && SEATS.some(candidate => candidate.id === player.seat) ? player.seat! : null;
-      const seatChanged = avatar.seat !== seat;
-      if (player.id === selfId && selfNeedsSync) {
-        avatar.group.position.set(player.x, seat === null ? 0 : AVATAR_SEATED_Y, player.z); avatar.target.copy(avatar.group.position);
-        selfNeedsSync = false; cancelSeatAction(); selfRelocated = true;
-      }
-      if (seatChanged) {
-        avatar.seat = seat;
-        const position = seat !== null ? SEATS.find(candidate => candidate.id === seat)! : player;
-        avatar.group.position.set(position.x, seat !== null ? AVATAR_SEATED_Y : 0, position.z);
-        avatar.target.copy(avatar.group.position);
-        applySeatPose(avatar);
-        if (player.id === selfId) {
-          selfRelocated = true;
-          path = []; dirtyPosition = false; marker.visible = false;
-          if (seat !== null) keys.clear();
-        }
-      }
-      if (player.id === selfId && pendingSeatAction && ((pendingSeatAction.kind === 'sit' && seat === pendingSeatAction.seat) || (pendingSeatAction.kind === 'stand' && seat === null) || (pendingSeatAction.kind === 'external' && seatChanged))) {
-        pendingSeatAction = null;
-        if (seat === null && resumeDestination) {
-          path = findPath(avatar.group.position.x, avatar.group.position.z, resumeDestination.x, resumeDestination.y);
-          resumeDestination = null;
-          if (path.length) { const end = path[path.length - 1]; marker.position.set(end.x, 0.035, end.y); marker.visible = true; }
-        }
-      }
-      if (seat !== null) {
-        const seatPosition = SEATS.find(candidate => candidate.id === seat)!;
-        avatar.target.set(seatPosition.x, AVATAR_SEATED_Y, seatPosition.z);
-      } else if (player.id !== selfId) avatar.target.set(player.x, 0, player.z);
-      else avatar.target.copy(avatar.group.position);
-      const chat = latestChats.get(player.id); if (chat) attachBubble(avatar, chat);
+      // A newcomer other than me waits for a build slot; its own copy of the
+      // entry is what later movement and action deltas update.
+      if (player.id !== selfId && !avatars.has(player.id)) { pendingPlayers.set(player.id, { ...player }); continue; }
+      pendingPlayers.delete(player.id);
+      if (applyPlayer(player)) selfRelocated = true;
     }
-    if (selfRelocated) {
-      const self = selfId ? avatars.get(selfId) : undefined;
-      if (firstJoinFocus && self && view === 'room') {
-        resetFollowCamera(camera, controls.target, { x: self.group.position.x, z: self.group.position.z, seated: self.seat !== null }, followAim, compactLayout.matches);
-        controls.update(); enforceInterior();
+    if (selfRelocated) focusRelocatedSelf();
+    // One or two newcomers appear with this roster, as they always have.
+    buildPendingAvatars();
+  }
+  function buildPendingAvatars() {
+    if (!pendingPlayers.size) return;
+    const started = performance.now(), self = selfId ? avatars.get(selfId) : undefined;
+    let selfRelocated = false;
+    // At least one per frame, more only while the frame can afford it.
+    for (let built = 0; pendingPlayers.size && built < 3 && (!built || performance.now() - started < 6); built++) {
+      let next = selfId ? pendingPlayers.get(selfId) : undefined, nearest = Infinity;
+      if (!next) for (const player of pendingPlayers.values()) {
+        const distance = self ? Math.hypot(player.x - self.group.position.x, player.z - self.group.position.z) : 0;
+        if (distance < nearest) { nearest = distance; next = player; }
       }
-      firstJoinFocus = false; trackSelf();
+      if (!next) break;
+      pendingPlayers.delete(next.id);
+      if (applyPlayer(next)) selfRelocated = true;
     }
+    if (selfRelocated) focusRelocatedSelf();
+    shadowBudget.invalidate();
+  }
+  function focusRelocatedSelf() {
+    const self = selfId ? avatars.get(selfId) : undefined;
+    if (firstJoinFocus && self && view === 'room') {
+      resetFollowCamera(camera, controls.target, { x: self.group.position.x, z: self.group.position.z, seated: self.seat !== null }, followAim, compactLayout.matches);
+      controls.update(); enforceInterior();
+    }
+    firstJoinFocus = false; trackSelf();
+  }
+  /** Creates or updates one visitor from a roster entry. True when it moved my own figure. */
+  function applyPlayer(player: PlayerView) {
+    let selfRelocated = false;
+    let avatar = avatars.get(player.id);
+    const color = Number.isFinite(player.color) && player.color > 255 ? player.color : PALETTE[Math.abs(player.color || 0) % PALETTE.length];
+    const appearance = normalizeAvatarAppearance(player.appearance, color);
+    if (!avatar) {
+      avatar = createAvatar(player.nickname, color, player.id === selfId, player.stockProfile ?? null, appearance, player.id);
+      avatar.group.position.set(THREE.MathUtils.clamp(player.x, BOUNDS.minX, BOUNDS.maxX), 0, THREE.MathUtils.clamp(player.z, BOUNDS.minZ, BOUNDS.maxZ));
+      avatars.set(player.id, avatar);
+    } else if (color !== avatar.color || appearanceKey(appearance) !== appearanceKey(avatar.appearance)) {
+      // Keep the root, local prediction target, held items and seated pose.
+      // A clothing update must not act like a reconnect/position correction.
+      avatar.model = replaceOfficeAvatarAppearance(avatar.model, color, appearance);
+      placeAvatarNameLabel(avatar.label, avatarLabelY(avatar.model));
+      avatar.arms = avatar.model.arms; avatar.legs = avatar.model.legs; avatar.lowerLegs = avatar.model.lowerLegs;
+      avatar.color = color; avatar.appearance = appearance;
+    }
+    // An ordinary emote sent before the jump can still arrive in a late roster.
+    // Do not revive that interrupted gesture after the local flight lands.
+    avatar.action = player.id === selfId && selfJumpPrediction !== undefined && player.action?.kind !== 'jump' ? null : player.action ?? null;
+    avatar.shoulder = player.shoulder ?? null;
+    if (!avatar.shoulder) avatar.shoulderLocallyLeft = false;
+    const disconnected = player.disconnected === true;
+    const selection = isRefreshmentSelection(player.refreshments) ? player.refreshments : null;
+    if (avatar.refreshments?.drink !== selection?.drink || avatar.refreshments?.snack !== selection?.snack) {
+      for (const child of [...avatar.tray.children]) { disposeObject(child); child.removeFromParent(); }
+      avatar.trayContent = selection ? refreshmentTray(selection) : null;
+      if (avatar.trayContent) avatar.tray.add(avatar.trayContent.group);
+      avatar.refreshments = selection ? { ...selection } : null; avatar.tray.visible = !!selection;
+    }
+    const stockProfile = player.stockProfile ?? null;
+    const labelChanged = avatar.nickname !== player.nickname || avatar.disconnected !== disconnected || avatar.stockProfile?.stock !== stockProfile?.stock || avatar.stockProfile?.average !== stockProfile?.average || avatar.stockProfile?.currency !== stockProfile?.currency;
+    avatar.stockProfile = stockProfile;
+    avatar.disconnected = disconnected;
+    if (labelChanged) { avatar.nickname = player.nickname; refreshAvatarLabel(avatar, player.id === selfId); }
+    const seat = Number.isInteger(player.seat) && SEATS.some(candidate => candidate.id === player.seat) ? player.seat! : null;
+    const seatChanged = avatar.seat !== seat;
+    if (player.id === selfId && selfNeedsSync) {
+      avatar.group.position.set(player.x, seat === null ? 0 : AVATAR_SEATED_Y, player.z); avatar.target.copy(avatar.group.position);
+      selfNeedsSync = false; cancelSeatAction(); selfRelocated = true;
+    }
+    if (seatChanged) {
+      avatar.seat = seat;
+      const position = seat !== null ? SEATS.find(candidate => candidate.id === seat)! : player;
+      avatar.group.position.set(position.x, seat !== null ? AVATAR_SEATED_Y : 0, position.z);
+      avatar.target.copy(avatar.group.position);
+      applySeatPose(avatar);
+      if (player.id === selfId) {
+        selfRelocated = true;
+        path = []; dirtyPosition = false; marker.visible = false;
+        if (seat !== null) keys.clear();
+      }
+    }
+    if (player.id === selfId && pendingSeatAction && ((pendingSeatAction.kind === 'sit' && seat === pendingSeatAction.seat) || (pendingSeatAction.kind === 'stand' && seat === null) || (pendingSeatAction.kind === 'external' && seatChanged))) {
+      pendingSeatAction = null;
+      if (seat === null && resumeDestination) {
+        path = findPath(avatar.group.position.x, avatar.group.position.z, resumeDestination.x, resumeDestination.y);
+        resumeDestination = null;
+        if (path.length) { const end = path[path.length - 1]; marker.position.set(end.x, 0.035, end.y); marker.visible = true; }
+      }
+    }
+    if (seat !== null) {
+      const seatPosition = SEATS.find(candidate => candidate.id === seat)!;
+      avatar.target.set(seatPosition.x, AVATAR_SEATED_Y, seatPosition.z);
+    } else if (player.id !== selfId) avatar.target.set(player.x, 0, player.z);
+    else avatar.target.copy(avatar.group.position);
+    const chat = latestChats.get(player.id); if (chat) attachBubble(avatar, chat);
+    return selfRelocated;
   }
   function updatePlayerMovement(player: { id: string; x: number; z: number; action?: null }) {
     const avatar = avatars.get(player.id);
-    if (!avatar) return;
+    if (!avatar) {
+      const queued = pendingPlayers.get(player.id);
+      if (queued && Number.isFinite(player.x) && Number.isFinite(player.z)) { queued.x = player.x; queued.z = player.z; if (player.action === null) queued.action = null; }
+      return;
+    }
     if (applyOfficeMovementDelta(avatar, player, player.id === selfId)) shadowBudget.invalidate();
   }
   function updatePlayerAction(id: string, action: PlayerView['action']) {
-    const avatar = avatars.get(id); if (!avatar) return;
+    const avatar = avatars.get(id);
+    if (!avatar) { const queued = pendingPlayers.get(id); if (queued) queued.action = action; return; }
     avatar.action = id === selfId && selfJumpPrediction !== undefined && action?.kind !== 'jump' ? null : action;
     shadowBudget.invalidate();
   }
@@ -941,7 +1011,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     }
   }
   function keyUp(event: KeyboardEvent) { keys.delete(event.key.length === 1 ? event.key.toLowerCase() : event.key); }
-  function pauseForInput() { keys.clear(); touchKeys.clear(); path = []; resumeDestination = null; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false; }
+  function pauseForInput() { keys.clear(); touchKeys.clear(); touchStick.x = touchStick.z = 0; path = []; resumeDestination = null; marker.visible = false; approachingRefreshments = false; approachingJumpPortal = false; }
   function focusIn(event: FocusEvent) { if (focusedInput(event.target)) pauseForInput(); }
   function blur() { pauseForInput(); activePointers.clear(); gestureDragged = true; seatHint.style.display = 'none'; seatHighlight.visible = false; }
   const activePointers = new Set<number>();
@@ -1009,7 +1079,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     renderer.domElement.style.cursor = interaction ? 'pointer' : 'grab';
     if (Number.isInteger(interaction?.object.userData.seat)) {
       const seat = SEATS.find(candidate => candidate.id === interaction!.object.userData.seat)!;
-      const occupant = [...avatars.entries()].find(([, avatar]) => avatar.seat === seat.id);
+      const occupant = [...avatars.entries()].find(([, avatar]) => avatar.seat === seat.id) ?? [...pendingPlayers.entries()].find(([, player]) => player.seat === seat.id);
       const mine = occupant?.[0] === selfId;
       (seatHighlight.material as THREE.MeshBasicMaterial).color.set(occupant && !mine ? 0xce9b73 : 0x9ad8cf);
       seatHighlight.position.set(seat.x, 0.035, seat.z); seatHighlight.visible = true;
@@ -1212,11 +1282,15 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   function animate(time: number) {
     animationId = 0;
     if (disposed || !renderingActive || document.hidden) { previousTime = time; return; }
+    // While someone types on a phone the room is mostly covered by the keyboard and the
+    // composer; drawing it at 20 Hz leaves the main thread and GPU to the text field.
+    if (compactLayout.matches && time - previousTime < 45 && focusedInput(document.activeElement)) { animationId = requestAnimationFrame(animate); return; }
     frameServerNow = Date.now() + serverTimeOffset;
     frameLocalNow = performance.timeOrigin + performance.now();
     const dt = Math.min((time - previousTime) / 1000, 0.05); previousTime = time;
     const smooth = 1 - Math.exp(-dt * 4);
     const blocked = modalOpen(), inputFocused = focusedInput(document.activeElement);
+    buildPendingAvatars();
     updateCamera(blocked);
     if (pendingSeatAction && time >= pendingSeatAction.expires) cancelSeatAction();
     if (inputFocused || blocked) pauseForInput();
@@ -1234,7 +1308,13 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
       if (pressed('a') || pressed('ArrowLeft')) { direction.x -= cameraRight.x; direction.y -= cameraRight.z; }
       if (pressed('d') || pressed('ArrowRight')) { direction.x += cameraRight.x; direction.y += cameraRight.z; }
       const distance = dt * NORMAL_MOVE_SPEED;
-      if (direction.lengthSq() > 0) direction.normalize().multiplyScalar(distance);
+      // Keys always walk at full speed; the stick alone walks slower when pushed only part-way.
+      let pace = 1;
+      if (direction.lengthSq() === 0 && (touchStick.x || touchStick.z)) {
+        direction.set(cameraRight.x * touchStick.x - cameraForward.x * touchStick.z, cameraRight.z * touchStick.x - cameraForward.z * touchStick.z);
+        pace = Math.max(.35, Math.min(1, Math.hypot(touchStick.x, touchStick.z)));
+      }
+      if (direction.lengthSq() > 0) direction.normalize().multiplyScalar(distance * pace);
       else if (path.length) {
         const p = path[0]; direction.set(p.x - self.group.position.x, p.y - self.group.position.z);
         const length = direction.length();
@@ -1331,6 +1411,8 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     avatar.arms.forEach(arm => { arm.rotation.x = avatar.refreshments ? -1.15 : seated ? -0.7 : 0; });
     // Thighs rest on the sofa cushion while the lower legs hang over its edge.
     avatar.ring.position.y = .025 - (seated ? AVATAR_SEATED_Y : 0);
+    // Furniture already grounds a seated figure.
+    avatar.blob.visible = !seated;
   }
   const refreshmentHand = new THREE.Vector3();
   function poseRefreshments(avatar:Avatar,now:number,moving:boolean,action:PlayerView['action']) {
@@ -1346,7 +1428,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     refreshmentHand.set(0,AVATAR_HAND_LOCAL_Y,.005);
     avatar.model.forearms[drinking?0:1].localToWorld(refreshmentHand);
     props.group.worldToLocal(refreshmentHand);
-    refreshmentHand.x+=drinking?.055:-.035; refreshmentHand.y+=drinking?-.09:.035; refreshmentHand.z+=drinking?.1:.015;
+    refreshmentHand.x+=drinking?.085:-.06; refreshmentHand.y+=drinking?-.065:.05; refreshmentHand.z+=drinking?.1:.02;
     const item=drinking?props.drink:props.snack;
     item.position.lerp(refreshmentHand,weight);
     item.rotation.x=(drinking?-.65:1.05)*weight;
@@ -1357,6 +1439,9 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
     const jump=avatarJumpHeight(action,now);
     avatar.group.position.y = jump+(moving ? Math.abs(Math.sin(time * 0.016)) * 0.04 : 0);
     avatar.ring.position.y=.025-jump;
+    // The blob stays on the floor and tightens as the figure leaves it.
+    const lift=avatar.group.position.y, tight=1-.42*Math.min(1,lift/1.4);
+    avatar.blob.visible=true; avatar.blob.position.y=BLOB_Y-lift; avatar.blob.scale.set(BLOB_WIDTH*tight,1,BLOB_DEPTH*tight);
     if (moving) {
       const targetAngle = Math.atan2(dx, dz);
       const difference = Math.atan2(Math.sin(targetAngle - avatar.group.rotation.y), Math.cos(targetAngle - avatar.group.rotation.y));
@@ -1377,7 +1462,7 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
   camera.position.copy(controls.target).add(new THREE.Vector3().copy(FOLLOW_CAMERA.defaultOffset));
   syncRendering();
   function dispose() {
-    disposed = true; cancelAnimationFrame(animationId); resizeObserver.disconnect(); bubbleResizeObserver.disconnect(); bubbleSizes.clear();
+    disposed = true; cancelAnimationFrame(animationId); resizeObserver.disconnect(); bubbleResizeObserver.disconnect(); bubbleSizes.clear(); pendingPlayers.clear();
     compactLayout.removeEventListener('change', resize);
     document.removeEventListener('visibilitychange', syncRendering);
     window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp); window.removeEventListener('blur', blur);
@@ -1399,9 +1484,10 @@ export function createClassroom(container: HTMLElement, callbacks: Callbacks) {
         }
       }
     });
+    geometries.add(blobGeometry); allMaterials.add(blobMaterial); textures.add(blobTexture);
     geometries.forEach(geometry => geometry.dispose()); allMaterials.forEach(mat => mat.dispose()); textures.forEach(texture => texture.dispose());
     latestChats.clear(); renderer.dispose(); renderer.domElement.remove(); cssRenderer.domElement.remove();
     chartWalls.front.host.remove(); chartWalls.rear.host.remove(); bubbleLayer.remove(); pantryInteract.remove(); jumpInteract.remove();
   }
-  return { setSelfId, setPlayers, updatePlayerMovement, updatePlayerAction, predictJump, setView, viewFrontCharts: () => setView('chart', 'front'), viewRearCharts: () => setView('chart', 'rear'), viewCommunity, approachRefreshments, approachJumpPortal, setJumpLeaderboard: jumpPortal.setLeaderboard, prepareShoulderLink, resetView, setFollow, isFollowing: () => followingSelf, panView, rotateView, tiltView, zoomView, correctPosition, setMoveInput, setRenderingActive, getWallChartHost: (side: ChartWallSide = 'front') => chartWalls[side].host, setMarketLabel, setPopularPosts, setServerTime, showChat, clearChats, pauseMovement: clearMovement, stopMovement, cancelSeatAction, dispose };
+  return { setSelfId, setPlayers, updatePlayerMovement, updatePlayerAction, predictJump, setView, viewFrontCharts: () => setView('chart', 'front'), viewRearCharts: () => setView('chart', 'rear'), viewCommunity, approachRefreshments, approachJumpPortal, setJumpLeaderboard: jumpPortal.setLeaderboard, prepareShoulderLink, resetView, setFollow, isFollowing: () => followingSelf, panView, rotateView, tiltView, zoomView, correctPosition, setMoveInput, setMoveStick, setRenderingActive, getWallChartHost: (side: ChartWallSide = 'front') => chartWalls[side].host, setMarketLabel, setPopularPosts, setServerTime, showChat, clearChats, pauseMovement: clearMovement, stopMovement, cancelSeatAction, dispose };
 }

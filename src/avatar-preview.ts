@@ -1,9 +1,12 @@
 import * as THREE from 'three';
-import { createOfficeAvatar } from './office-avatar';
+import { createOfficeAvatar, type OfficeAvatar } from './office-avatar';
+import { poseAvatarLife } from './office-avatar-pose';
 import { APPEARANCE_OPTIONS, type AvatarAppearance } from '../shared/avatar-appearance';
 
-/** The dressing room renders the same jointed model used in the office. It only
- * draws on a change, resize or drag; an open picker does not run a second loop. */
+/** The dressing room renders the same jointed model used in the office, alive:
+ * it breathes, blinks and gives a little hop when its outfit changes. The loop
+ * is light (one figure, 30 Hz) and runs only while the preview is attached, on
+ * screen and in a visible tab; with reduced motion it draws on demand only. */
 export function createAvatarPreview(host: HTMLElement, initial: AvatarAppearance) {
   const root = document.createElement('div');
   root.className = 'avatar-model-preview';
@@ -56,23 +59,45 @@ export function createAvatarPreview(host: HTMLElement, initial: AvatarAppearance
   floor.rotation.x = -Math.PI / 2; floor.position.y = .005; scene.add(floor);
   let avatar = createOfficeAvatar(0x7a9bb4,initial);
   let yaw = -.28, disposed = false, pendingFrame = 0, pointerId: number | null = null, lastX = 0;
+  let onScreen = true, dirty = true, lastDraw = -Infinity, popAt = -Infinity, lastWidth = 0, lastHeight = 0;
+  // The figure that was on screen before an outfit change. It is released only
+  // after its successor has been drawn: every figure shares one shader program,
+  // and letting go of the only user would recompile it in the middle of the hop.
+  let retired: OfficeAvatar | undefined;
+  const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   avatar.group.rotation.y = yaw; scene.add(avatar.group);
   function describe(value: AvatarAppearance) {
     const name = APPEARANCE_OPTIONS.species.find(option=>option.id===value.species)?.label ?? '캐릭터';
     canvas.setAttribute('aria-label',`${name} 3D 미리보기. 드래그 또는 좌우 방향키로 회전합니다.`);
   }
-  function draw() {
+  function draw(time: number) {
     pendingFrame = 0;
     if (disposed || renderer.getContext().isContextLost()) return;
     const width = root.clientWidth, height = root.clientHeight;
     if (!width || !height) return;
-    const aspect = width / height, halfHeight = Math.max(1.22,.73/aspect);
-    camera.left = -halfHeight*aspect; camera.right = halfHeight*aspect;
-    camera.top = halfHeight; camera.bottom = -halfHeight; camera.updateProjectionMatrix();
-    renderer.setSize(width,height,false);
+    const animated = !still && onScreen && !document.hidden && root.isConnected;
+    if (animated) pendingFrame = requestAnimationFrame(draw);
+    // A drag, resize or outfit change draws at once; idle life needs only 30 Hz.
+    if (!dirty && time - lastDraw < 1000 / 30 - 1) return;
+    dirty = false; lastDraw = time;
+    if (!still) {
+      poseAvatarLife(avatar, time, false);
+      // New clothes: one soft squash-and-stretch hop.
+      const pop = Math.min(1, (time - popAt) / 420), spring = pop < 1 ? Math.sin(pop * Math.PI * 2) * (1 - pop) * .06 : 0;
+      avatar.group.scale.set(1 - spring * .6, 1 + spring, 1 - spring * .6);
+      avatar.group.position.y = pop < 1 ? Math.sin(pop * Math.PI) * .05 : 0;
+    }
+    if (width !== lastWidth || height !== lastHeight) {
+      lastWidth = width; lastHeight = height;
+      const aspect = width / height, halfHeight = Math.max(1.22,.73/aspect);
+      camera.left = -halfHeight*aspect; camera.right = halfHeight*aspect;
+      camera.top = halfHeight; camera.bottom = -halfHeight; camera.updateProjectionMatrix();
+      renderer.setSize(width,height,false);
+    }
     renderer.render(scene,camera);
+    retired?.dispose(); retired = undefined;
   }
-  function requestDraw() { if (!disposed && !pendingFrame) pendingFrame = requestAnimationFrame(draw); }
+  function requestDraw() { dirty = true; if (!disposed && !pendingFrame) pendingFrame = requestAnimationFrame(draw); }
   function pointerDown(event: PointerEvent) {
     if (pointerId !== null || (event.pointerType==='mouse' && event.button!==0)) return;
     pointerId=event.pointerId; lastX=event.clientX; canvas.setPointerCapture(event.pointerId); canvas.style.cursor='grabbing';
@@ -102,22 +127,32 @@ export function createAvatarPreview(host: HTMLElement, initial: AvatarAppearance
   canvas.addEventListener('webglcontextlost',contextLost);
   canvas.addEventListener('webglcontextrestored',contextRestored);
   const resize = new ResizeObserver(requestDraw); resize.observe(root);
+  // Off screen (scrolled away, closed dialog, detached) the loop simply ends;
+  // these wake it again.
+  const watcher = typeof IntersectionObserver === 'undefined' ? undefined : new IntersectionObserver(entries => {
+    onScreen = entries[entries.length - 1].isIntersecting; if (onScreen) requestDraw();
+  });
+  watcher?.observe(root);
+  document.addEventListener('visibilitychange', requestDraw);
   describe(initial); requestDraw();
   return {
     update(value: AvatarAppearance) {
       if (disposed) return;
       const next=createOfficeAvatar(0x7a9bb4,value);
-      next.group.rotation.y=yaw; scene.remove(avatar.group); avatar.dispose(); avatar=next; scene.add(avatar.group);
-      describe(value); requestDraw();
+      next.group.rotation.y=yaw; scene.remove(avatar.group);
+      // Quick taps: the drawn figure already waiting keeps the program alive.
+      if (retired) avatar.dispose(); else retired = avatar;
+      avatar=next; scene.add(avatar.group);
+      popAt = performance.now(); describe(value); requestDraw();
     },
     dispose() {
       if (disposed) return;
-      disposed=true; resize.disconnect(); cancelAnimationFrame(pendingFrame);
+      disposed=true; resize.disconnect(); watcher?.disconnect(); document.removeEventListener('visibilitychange',requestDraw); cancelAnimationFrame(pendingFrame);
       canvas.removeEventListener('pointerdown',pointerDown); canvas.removeEventListener('pointermove',pointerMove);
       canvas.removeEventListener('pointerup',pointerEnd); canvas.removeEventListener('pointercancel',pointerEnd);
       canvas.removeEventListener('lostpointercapture',pointerEnd); canvas.removeEventListener('keydown',keyboard);
       canvas.removeEventListener('webglcontextlost',contextLost); canvas.removeEventListener('webglcontextrestored',contextRestored);
-      avatar.dispose(); floorGeometry.dispose(); floorMaterial.dispose(); contactTexture.dispose(); renderer.dispose(); renderer.forceContextLoss(); root.remove();
+      avatar.dispose(); retired?.dispose(); retired = undefined; floorGeometry.dispose(); floorMaterial.dispose(); contactTexture.dispose(); renderer.dispose(); renderer.forceContextLoss(); root.remove();
     },
   };
 }

@@ -37,3 +37,29 @@ test('slot views show the actual sixty items without clipping their clothing or 
     }finally{model.dispose();}
   }
 });
+
+test('a back item with its own view fills more of the card than the slot view and still fits it',()=>{
+  const point=new Vector3(),slotView=avatarThumbnailFrame('backwear');
+  for(const item of ACCESSORY_ADDITIONS.filter(item=>item.slot==='backwear')){
+    const view=avatarThumbnailFrame('backwear',item.id),model=createOfficeAvatar(0x7a9bb4,{...DEFAULT_APPEARANCE,backwear:item.id} as AvatarAppearance);
+    try{
+      assert.equal(view.yaw,slotView.yaw);assert.deepEqual(view.camera,slotView.camera);
+      assert.ok(view.camera[2]<view.target[2],`${item.id}: seen from behind`);
+      model.group.rotation.y=view.yaw;model.group.updateMatrixWorld(true);
+      const camera=new OrthographicCamera(-view.halfSize,view.halfSize,view.halfSize,-view.halfSize,.05,20);
+      camera.position.set(...view.camera);camera.lookAt(...view.target);camera.updateMatrixWorld(true);
+      let largest=0;
+      model.upperBody.traverse(object=>{
+        if(!(object instanceof Mesh))return;
+        for(let parent=object.parent;parent&&parent!==model.upperBody;parent=parent.parent)if(parent===model.head||parent===model.heartEffect)return;
+        const vertices=object.geometry.getAttribute('position');
+        for(let index=0;index<vertices.count;index++){point.fromBufferAttribute(vertices,index).applyMatrix4(object.matrixWorld).project(camera);largest=Math.max(largest,Math.abs(point.x),Math.abs(point.y));}
+      });
+      assert.ok(largest<=1,`${item.id}: torso and item project outside the card (${largest.toFixed(3)})`);
+      // Bags, the shell and the jet pack are small: their card may not leave more than a third of its width empty.
+      if(!item.id.includes('wings'))assert.ok(largest>=.66&&view.halfSize<slotView.halfSize,`${item.id}: too small in its card (${largest.toFixed(3)})`);
+    }finally{model.dispose();}
+  }
+  assert.equal(avatarThumbnailFrame('backwear','none'),slotView,'an item without a view of its own uses the slot view');
+  assert.equal(avatarThumbnailFrame('top','tank-white'),avatarThumbnailFrame('top'));
+});

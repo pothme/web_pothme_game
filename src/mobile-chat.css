@@ -5,7 +5,7 @@
   .social-panel:not(.is-composing){left:16px;bottom:12px;width:calc(100% - 32px);padding:0;border:0;background:transparent;box-shadow:none;backdrop-filter:none;pointer-events:none}
   .social-panel:not(.is-composing) .social-header,.social-panel:not(.is-composing) .chat-form,.social-panel:not(.is-composing) .social-footer,.social-panel:not(.is-composing) .social-message,.social-panel:not(.is-composing) .chat-empty{display:none}
   .social-panel:not(.is-composing) .chat-log,.social-panel:not(.is-composing) .chat-log[hidden]{display:flex!important;flex-direction:column;justify-content:flex-end;gap:3px;max-height:78px;margin:0;overflow:hidden;pointer-events:none}
-  .social-panel:not(.is-composing) .chat-line{display:flex;align-items:baseline;flex:none;max-width:100%;width:max-content;margin:0;padding:3px 8px;border:0;border-radius:9px;background:#112c3d8f;box-shadow:0 1px 5px #0c253822;backdrop-filter:blur(3px);font-size:10px;line-height:18px;overflow:hidden}
+  .social-panel:not(.is-composing) .chat-line{display:flex;align-items:baseline;flex:none;max-width:100%;width:max-content;margin:0;padding:3px 8px;border:0;border-radius:9px;background:#112c3dc2;box-shadow:0 1px 5px #0c253822;backdrop-filter:none;font-size:10px;line-height:18px;overflow:hidden}
   .social-panel:not(.is-composing) .chat-line:not(:nth-last-child(-n + 3)){display:none}
   .social-panel:not(.is-composing) .chat-line strong{max-width:75px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#b9dfd4}
   .social-panel:not(.is-composing) .chat-line span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#f1f7f8}

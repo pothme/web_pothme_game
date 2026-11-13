@@ -1,15 +1,23 @@
 import { DEFAULT_APPEARANCE, normalizeAvatarAppearance, type AvatarAppearance } from '../shared/avatar-appearance';
 import { SHOP_ITEMS, defaultAvatarProfile, shopItem, validateOwnedAppearance, type AvatarProfile } from '../shared/avatar-catalog';
-import { GAME_RULES, gameDefinition, isGameKind, type GameProfile, type GameRoomSummary, type GameRoomView, type GameSnapshot, type GameRoundResult } from '../shared/game-room';
+import { GAME_RULES, gameDefinition, isGameKind, isSessionGame, type GameProfile, type GameRoomSummary, type GameRoomView, type GameSnapshot, type GameRoundResult } from '../shared/game-room';
+import { JUMP_RULES, jumpFloorReward, jumpRewardFloor } from '../shared/jump-game';
 import { GameError } from './domain';
-import { normalizeChat, socialRequestId, CHAT_RULES } from './social';
+import { normalizeChat, socialRequestId } from './social';
+import { chatBurstTake } from '../shared/chat-burst';
 import { advanceRoom, AUCTION_PRIZES, finishRoom, newMember, resolveRound, roundComplete, startRoom, validateChoice, type InternalRoom } from './game-rules';
 
 type Receipt = { id:string; signature:string };
 interface StoredProfile extends AvatarProfile { wins:number; rewardDay:string; dailyEarned:number; receipts:Receipt[] }
 interface HallState { version:1; visitors:string[]; rooms:InternalRoom[]; receipts:Record<string,Receipt[]> }
 interface HubPlayer { id:string; nickname:string }
-interface HubHooks { players():HubPlayer[]; send(id:string,packet:unknown):void; changed?(id?:string):void }
+interface HubHooks {
+  players():HubPlayer[]; send(id:string,packet:unknown):void; changed?(id?:string):void;
+  /** Pad a player stands on inside the jump tower right now, or null when they are not climbing. */
+  towerFloor?(id:string):number|null;
+  /** Best floor the player ever reached in the jump tower. */
+  towerBest?(id:string):number;
+}
 const dayKey=(now:number)=>new Date(now+9*60*60*1000).toISOString().slice(0,10);
 const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value)) as T;
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store'}});
@@ -18,6 +26,7 @@ const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cac
 export class GameHub {
   private state:HallState;
   private profiles=new Map<string,StoredProfile>();
+  /** Room chat burst allowance per player (shared/chat-burst). */
   private chatAt=new Map<string,number>();
   private profileAt=new Map<string,number>();
   constructor(private storage:DurableObjectStorage,private hooks:HubHooks) {
@@ -46,7 +55,8 @@ export class GameHub {
     return this.awardExternalBatch(id,[{token,amount}],now,commit);
   }
   awardExternalBatch(id:string,awards:{token:string;amount:number}[],now=Date.now(),commit?:()=>void):number {
-    if(awards.length>60||new Set(awards.map(item=>item.token)).size!==awards.length||awards.some(({token,amount})=>!/^jump-v1:floor:([1-9]|[1-5][0-9]|60)$/.test(token)||amount!==(token==='jump-v1:floor:60'?301:1)))throw new GameError('JUMP_REWARD','점프 보상 정보를 확인해 주세요.');
+    // Only floors of the current tower, each at exactly its own price, are payable.
+    if(awards.length>JUMP_RULES.floors||new Set(awards.map(item=>item.token)).size!==awards.length||awards.some(({token,amount})=>{const floor=jumpRewardFloor(token);return floor===null||amount!==jumpFloorReward(floor);}))throw new GameError('JUMP_REWARD','점프 보상 정보를 확인해 주세요.');
     let paid=0;
     try {this.storage.transactionSync(()=>{
       for(const {token,amount} of awards)if(!this.storage.sql.exec('SELECT 1 FROM game_rewards WHERE match_id=? AND player_id=?',token,id).toArray().length){
@@ -65,6 +75,45 @@ export class GameHub {
   appearance(id:string):AvatarAppearance {return {...this.readProfile(id).appearance};}
   owns(id:string,itemId:string):boolean {return this.readProfile(id).owned.includes(itemId);}
   location(id:string):'office'|'games' {return this.state.visitors.includes(id)?'games':'office';}
+  /** Best floors raised in memory since the last write of the hub state. */
+  private towerDirty=false;
+  /** Tower room this player belongs to, or null. The jump authority shares presence, chat and
+   * its live ranking only inside this room, and refuses entry without one. */
+  towerRoom(id:string):string|null {const room=this.current(id);return room?.kind==='jump-tower'?room.id:null;}
+  /** Members of a tower room who are waiting in the room view rather than climbing see its
+   * ranking through their lobby state; climbers get the lighter `jump-room` packet instead. */
+  private emitTower(room:InternalRoom,now:number) {
+    const online=new Set(this.hooks.players().map(player=>player.id));
+    for(const member of room.members)if(online.has(member.id)&&(this.hooks.towerFloor?.(member.id)??null)===null)this.emit(member.id,now);
+  }
+  /** Someone entered or left the tower: refresh the room view of that player's room.
+   * Best floors raised during the climb are written here, once, instead of on every ranking tick. */
+  towerPresence(id:string,now=Date.now()) {
+    const room=this.current(id);if(room?.kind!=='jump-tower')return;
+    if(this.towerDirty)this.commit(()=>{room.updatedAt=now;});
+    this.emitTower(room,now);
+  }
+  /** The one room ranking, shown both inside the tower and in the room view. The jump authority
+   * reports each climber's best floor of the current climb; the room keeps the best of the whole
+   * stay, so stepping out and back in never lowers it. Raised scores stay in memory and are
+   * stored with the next room change (any command, a climber stepping out, a disconnect). */
+  towerRanking<T extends {id:string;floor:number;bestFloor:number}>(roomId:string,ranking:readonly T[]):T[] {
+    const room=this.state.rooms.find(candidate=>candidate.id===roomId);if(!room||room.kind!=='jump-tower')return [...ranking];
+    return ranking.map(row=>{
+      const member=room.members.find(member=>member.id===row.id&&!member.forfeited);if(!member)return row;
+      const best=Number.isSafeInteger(row.bestFloor)?Math.max(0,Math.min(JUMP_RULES.floors,row.bestFloor)):0;
+      if(best>member.score){member.score=best;this.towerDirty=true;}
+      return member.score===row.bestFloor?row:{...row,bestFloor:member.score};
+    }).sort((a,b)=>b.bestFloor-a.bestFloor||b.floor-a.floor||(a.id<b.id?-1:1));
+  }
+  /** The ranking of a tower room changed: refresh the members who wait in the room view. */
+  towerRoomChanged(roomId:string,now=Date.now()) {const room=this.state.rooms.find(candidate=>candidate.id===roomId);if(room?.kind==='jump-tower')this.emitTower(room,now);}
+  /** Keeps the best floors of a ranking and refreshes the room view in one call. */
+  towerProgress<T extends {id:string;bestFloor:number;floor?:number}>(roomId:string,ranking:readonly T[],now=Date.now()) {
+    const room=this.state.rooms.find(candidate=>candidate.id===roomId);if(!room||room.kind!=='jump-tower')return;
+    this.towerRanking(roomId,ranking.map(row=>({...row,floor:row.floor??0})));
+    this.emitTower(room,now);
+  }
   updateAppearance(id:string,value:unknown):AvatarAppearance {
     const previous=this.readProfile(id);let appearance:AvatarAppearance;
     try {appearance=validateOwnedAppearance(value,previous.owned);}catch(error){throw new GameError('AVATAR_INVALID',error instanceof Error?error.message:'캐릭터 설정을 확인해 주세요.');}
@@ -73,7 +122,7 @@ export class GameHub {
   }
   private current(id:string) {return this.state.rooms.find(room=>room.members.some(member=>member.id===id&&!member.forfeited));}
   private summary(room:InternalRoom):GameRoomSummary {
-    return {id:room.id,kind:room.kind,name:gameDefinition(room.kind).name,hostId:room.hostId,count:room.members.filter(member=>!member.forfeited).length,maxPlayers:gameDefinition(room.kind).maxPlayers,phase:room.phase,practice:room.practice};
+    return {id:room.id,kind:room.kind,name:gameDefinition(room.kind).name,hostId:room.hostId,hostName:room.members.find(member=>member.id===room.hostId)?.nickname??'',count:room.members.filter(member=>!member.forfeited).length,maxPlayers:gameDefinition(room.kind).maxPlayers,phase:room.phase,practice:room.practice};
   }
   private publicResult(room:InternalRoom,result:GameRoundResult,id:string):GameRoundResult {
     if(room.kind!=='cipher-race')return clone(result);
@@ -85,17 +134,18 @@ export class GameHub {
     if(room){
       const own=room.members.find(member=>member.id===id)!;
       view={...this.summary(room),matchId:room.matchId,round:room.round,totalRounds:gameDefinition(room.kind).rounds,deadline:room.deadline,
-        players:room.members.map(member=>({id:member.id,nickname:member.nickname,bot:member.bot,connected:member.bot||online.has(member.id),ready:member.ready,submitted:member.choice!==null,team:member.team,score:member.score,chips:member.chips,solved:member.solved,forfeited:member.forfeited,appearance:member.bot?{...DEFAULT_APPEARANCE,hair:member.id.endsWith('1')?'bob':'curtain'}:this.appearance(member.id)})),
+        players:room.members.map(member=>({id:member.id,nickname:member.nickname,bot:member.bot,connected:member.bot||online.has(member.id),ready:member.ready,submitted:member.choice!==null,team:member.team,score:member.score,chips:member.chips,solved:member.solved,forfeited:member.forfeited,appearance:member.bot?{...DEFAULT_APPEARANCE,hair:member.id.endsWith('1')?'bob':'curtain'}:this.appearance(member.id),...(room.kind==='jump-tower'?{floor:online.has(member.id)?this.hooks.towerFloor?.(member.id)??null:null}:{})})),
         myChoice:own.choice===null?null:clone(own.choice),myHints:clone(own.hints),prize:room.kind==='blind-auction'&&room.round>0?AUCTION_PRIZES[room.round-1]??null:null,vaults:{...room.vaults},
         lastResult:room.history.length?this.publicResult(room,room.history[room.history.length-1]!,id):null,history:room.history.map(result=>this.publicResult(room,result,id)),results:clone(room.results),secret:room.phase==='finished'&&room.kind==='cipher-race'&&!room.finishReason?[...room.secret]:null,finishReason:room.finishReason,chats:clone(room.chats??[])};
     }
-    return {area:this.location(id),rooms:this.state.rooms.filter(room=>room.phase!=='finished'||room.id===view?.id).map(room=>this.summary(room)),room:view,profile:this.profile(id,now),serverTime:now};
+    return {area:this.location(id),rooms:this.state.rooms.filter(room=>room.phase!=='finished'||room.id===view?.id).map(room=>this.summary(room)),room:view,profile:this.profile(id,now),serverTime:now,towerBest:this.hooks.towerBest?.(id)??0};
   }
   private emit(id:string,now:number,requestId?:string) {this.hooks.send(id,{type:'game-state',state:this.snapshot(id,now),...(requestId?{requestId}:{})});}
   private notify(now:number,requestId?:string,actor?:string) {
-    for(const player of this.hooks.players())if(this.location(player.id)==='games'||player.id===actor)this.emit(player.id,now,player.id===actor?requestId:undefined);
+    // Climbers are busy inside the tower: they get a fresh lobby state when they step back out.
+    for(const player of this.hooks.players())if(player.id===actor||this.location(player.id)==='games'&&(this.hooks.towerFloor?.(player.id)??null)===null)this.emit(player.id,now,player.id===actor?requestId:undefined);
   }
-  private persist() {this.storage.sql.exec('INSERT INTO game_hub_state(id,state_json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json',JSON.stringify(this.state));}
+  private persist() {this.towerDirty=false;this.storage.sql.exec('INSERT INTO game_hub_state(id,state_json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json',JSON.stringify(this.state));}
   private commit(change:()=>void) {
     const before=clone(this.state),profiles=new Map([...this.profiles].map(([id,value])=>[id,clone(value)]));
     try {this.storage.transactionSync(()=>{change();this.persist();});}catch(error){this.state=before;this.profiles=profiles;throw error;}
@@ -140,7 +190,7 @@ export class GameHub {
     this.emit(id,now);this.notify(now);
   }
   left(id:string,now=Date.now()) {
-    this.chatAt.delete(id);
+    // The chat allowance outlives the socket: reconnecting must not buy a new burst.
     const room=this.current(id);
     if(room)this.commit(()=>{const member=room.members.find(member=>member.id===id)!;member.disconnectedAt=now;if(room.hostId===id){const next=room.members.find(candidate=>candidate.id!==id&&!candidate.bot&&!candidate.forfeited&&this.hooks.players().some(player=>player.id===candidate.id));if(next)room.hostId=next.id;}});
     else if(this.state.visitors.includes(id)||this.state.receipts[id])this.commit(()=>{this.state.visitors=this.state.visitors.filter(visitor=>visitor!==id);delete this.state.receipts[id];});
@@ -209,7 +259,8 @@ export class GameHub {
         if(!isGameKind(input.kind))throw new GameError('GAME_KIND','게임을 선택해 주세요.');
         if(this.state.rooms.filter(candidate=>candidate.phase!=='finished').length>=GAME_RULES.maxRooms)throw new GameError('GAME_ROOM_FULL','모든 테이블을 사용 중이에요. 열린 방에 참여해 주세요.');
         if(!this.state.visitors.includes(id))this.state.visitors.push(id);
-        const practice=input.practice===true,members=[newMember(id,actor.nickname)];
+        // A session room is an open room of real players: it has no practice variant.
+        const practice=input.practice===true&&!isSessionGame(input.kind),members=[newMember(id,actor.nickname)];
         if(practice)for(let index=1;index<gameDefinition(input.kind).minPlayers;index++)members.push(newMember(`bot-${crypto.randomUUID()}-${index}`,`연습봇 ${index}`,true));
         this.state.rooms.push({id:crypto.randomUUID(),kind:input.kind,hostId:id,practice,phase:'waiting',members,round:0,deadline:null,updatedAt:now,secret:[],vaults:{A:0,B:0},history:[],results:[],finishReason:null,matchId:'',awarded:false,chats:[]});
       }else if(type==='game-join'){
@@ -221,6 +272,8 @@ export class GameHub {
       }else{
         if(!room)throw new GameError('GAME_ROOM','먼저 게임 테이블에 참여해 주세요.');
         const member=room.members.find(member=>member.id===id)!;
+        // Session rooms have no ready check, rounds or rematch; only the room chat applies.
+        if(isSessionGame(room.kind)&&type!=='game-chat')throw new GameError('GAME_SESSION_ROOM','이 방은 준비나 시작 없이 바로 입장하는 방이에요.');
         if(type==='game-ready'){
           if(room.phase!=='waiting'||typeof input.ready!=='boolean')throw new GameError('GAME_READY','대기 중인 테이블에서 준비해 주세요.');member.ready=input.ready;
         }else if(type==='game-start'){
@@ -238,8 +291,10 @@ export class GameHub {
           room.members=room.members.filter(member=>!member.forfeited&&!member.disconnectedAt);room.members=room.members.map(member=>newMember(member.id,member.nickname,member.bot));
           room.phase='waiting';room.round=0;room.deadline=null;room.history=[];room.results=[];room.secret=[];room.finishReason=null;room.vaults={A:0,B:0};
         }else if(type==='game-chat'){
-          const text=normalizeChat(input.text);if(now<(this.chatAt.get(id)??0)+CHAT_RULES.chatCooldownMs)throw new GameError('CHAT_COOLDOWN','조금만 천천히 이야기해 주세요.');
-          room.chats=[...(room.chats??[]),{id:crypto.randomUUID(),playerId:id,nickname:actor.nickname,text,sentAt:now}].slice(-30);this.chatAt.set(id,now);
+          const text=normalizeChat(input.text),burst=chatBurstTake(this.chatAt.get(id),now);if(!burst.ok)throw new GameError('CHAT_COOLDOWN','조금만 천천히 이야기해 주세요.',burst.retryAt);
+          room.chats=[...(room.chats??[]),{id:crypto.randomUUID(),playerId:id,nickname:actor.nickname,text,sentAt:now}].slice(-30);
+          if(this.chatAt.size>=256)for(const[key,fullAt]of this.chatAt)if(fullAt<=now)this.chatAt.delete(key);
+          this.chatAt.set(id,burst.fullAt);
         }else throw new GameError('GAME_COMMAND','게임 요청을 확인해 주세요.');
         room.updatedAt=now;
       }

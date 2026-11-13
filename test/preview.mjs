@@ -7,6 +7,7 @@ const {mf,room,restart}=await createHarness({port:8890,assets:true});
 console.log(`Fixture ready: ${await mf.ready}`);
 console.log('commands: friend [NAME], friend-chat TEXT, friend-seat N, friend-stand, friend-leave, fill [TOTAL=50], empty, seed-community, snapshot, usage-normal, usage-warning, usage-critical, usage-reset, restart, quit');
 console.log('game commands: game-state, game-friend-join, game-friend-choice BID|invest|guard|steal|1,2,3, game-friend-leave, game-next');
+console.log('tower commands (create a 점프 타워 room in the browser first): tower-friend-enter, tower-friend-move [TICKS], tower-friend-chat TEXT, tower-friend-exit, tower-state');
 let friend,friendId,botNumber=0,friendTower;
 const friendRequests=new Map();
 async function friendCommand(type,extra={}) {
@@ -57,7 +58,7 @@ for await(const line of input){const[command,value]=line.trim().split(/\s+/);try
  if(command==='friend')result=await addFriend(value);
  else if(command==='tower-state')result=(await room.testTowerStates()).map(({nickname,state})=>({nickname,ack:state.ackSeq,state:state.state}));
  else if(command==='tower-preview')result=await room.testTowerPreview(Number(value)||0,line.trim().split(/\s+/)[2]??'standing');
- else if(command==='tower-friend-enter'){if(friend?.readyState!==1)await addFriend();await room.testPositions({[friendId]:{x:-56.6,z:-2.8}});friendTower=await friendCommand('jump-enter');result={active:friendTower.active,floor:friendTower.state.floor};}
+ else if(command==='tower-friend-enter'){if(friend?.readyState!==1)await addFriend();const current=await room.testGames(friendId);if(current.room?.kind!=='jump-tower'){const target=(await room.testGames()).flatMap(peer=>peer.state.rooms).find(table=>table.kind==='jump-tower'&&table.count<table.maxPlayers);if(!target)throw new Error('Create a 점프 타워 room in the browser first.');if(current.room)await friendCommand('game-leave');await friendCommand('game-join',{roomId:target.id});}friendTower=await friendCommand('jump-enter');result={active:friendTower.active,room:friendTower.roomId,floor:friendTower.state.floor};}
  else if(command==='tower-friend-chat')result=await friendCommand('jump-chat',{text:line.trim().slice(command.length).trim()});
  else if(command==='tower-friend-move'){friendTower=await friendCommand('jump-sync');const ticks=Math.min(12,Math.max(1,Number(value)||12));friendTower=await friendCommand('jump-input',{runId:friendTower.runId,frames:Array.from({length:ticks},(_,i)=>({seq:friendTower.ackSeq+i+1,x:1,z:0,jump:false}))});result={x:friendTower.state.x,y:friendTower.state.y,z:friendTower.state.z};}
  else if(command==='tower-friend-exit'){friendTower=await friendCommand('jump-exit',{runId:friendTower.runId});result={active:friendTower.active};}

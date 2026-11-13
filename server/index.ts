@@ -1,7 +1,7 @@
 import { JumpSocial } from './jump-social';
 import { JUMP_SOCIAL_RULES, type JumpPeerView, type JumpPeerMotion } from '../shared/jump-social';
 import { JumpGame } from './jump-game';
-import { nearJumpPortal } from '../shared/jump-portal';
+import { jumpFloorReward, jumpRewardToken } from '../shared/jump-game';
 import { DurableObject } from 'cloudflare:workers';
 import { COLORS, GameError, canJoin, validateNickname } from './domain';
 import { AdminAuth, initialAdmin, adminError, type AdminSecurity } from './admin';
@@ -29,12 +29,15 @@ import { ACTION_NOTICE_RULES, actionNoticeText, type ActionNotice, type ActionNo
 import { GameHub } from './game-hub';
 import { shopItem, validateOwnedAppearance } from '../shared/avatar-catalog';
 import { normalizeWhisper, WHISPER_RULES, type WhisperMessage } from '../shared/whisper';
+import { CHAT_BURST, chatBurstReplay, chatBurstTake } from '../shared/chat-burst';
 export interface Env extends UsageEnv, GoogleAuthEnv { CLASSROOM: DurableObjectNamespace<Classroom>; ASSETS: Fetcher; ADMIN_PASSWORD?: string; KOREAN_CHARTS_ENABLED?: string }
 interface Attachment {
   id: string; nickname: string; color: number; x: number; z: number; seat: number | null; layoutVersion: number;
   stockProfile?: StockProfile | null;
   lastChat?: { requestId: string; message: ChatMessage };
-  nextWhisperAt?: number;
+  /** Burst allowances (shared/chat-burst): one number each, the time the bucket is full again. */
+  chatBurst?: number;
+  whisperBurst?: number;
   lastAvatarAction?: { requestId: string; action: AvatarActionView };
   avatarActionReceipts?: { requestId: string; kind: AvatarActionView['kind']; actionId: string }[];
   avatarActionCancelled?: boolean;
@@ -91,12 +94,18 @@ export class Classroom extends DurableObject<Env> {
   private jump: JumpGame;
   private jumpSocial: JumpSocial;
   private jumpPresenceTimer: ReturnType<typeof setTimeout> | undefined;
+  private jumpFlushTimer: ReturnType<typeof setTimeout> | undefined;
   private jumpPresenceAt=0;
-  private jumpRosterKey='';
+  private jumpRosterKeys=new Map<string,string>();
+  private jumpRoomKeys=new Map<string,string>();
+  private jumpRoomSentAt=0;
+  private jumpRoomTimer: ReturnType<typeof setTimeout> | undefined;
   private jumpMotions=new Map<string,string>();
   private jumpRankingSentAt = 0;
   private jumpRankingTimer: ReturnType<typeof setTimeout> | undefined;
   private jumpRankingKey = '';
+  /** Office chat allowance and the requests of the running burst, by player: a socket attachment ends with its socket, and closing a tab must not buy a new burst. */
+  private chatBursts = new Map<string, number>(); private chatReceipts = new Map<string, { requestId: string; message: ChatMessage }[]>();
   private alarmUpdates: Promise<void> = Promise.resolve();
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -156,6 +165,9 @@ export class Classroom extends DurableObject<Env> {
     this.games = new GameHub(this.ctx.storage, {
       players: () => this.sockets().flatMap(socket => { const p = this.attachment(socket); return p ? [{ id: p.id, nickname: p.nickname }] : []; }),
       send: (id, packet) => { for (const socket of this.sockets()) if (this.attachment(socket)?.id === id) this.send(socket, packet); },
+      // The lobby shows tower progress but never decides it: both values come from the jump authority.
+      towerFloor: id => this.jump?.roomOf(id) == null ? null : this.jump.peerState(id)?.floor ?? null,
+      towerBest: id => this.towerBestOf(id),
       changed: (id) => {
         for (const socket of this.sockets()) {
           const p = this.attachment(socket)!;
@@ -166,35 +178,66 @@ export class Classroom extends DurableObject<Env> {
           if (p.id === id) this.send(socket, { type: 'avatar-profile', profile: this.games.profile(p.id) });
         }
         this.broadcast({ type: 'players', players: this.players() });
-        if(this.jump)this.scheduleJumpPresence();
+        // Lobby membership is the source of truth for tower rooms.
+        if(this.jump){this.jump.syncRooms();this.scheduleJumpPresence();}
       },
     });
     this.jump = new JumpGame(this.ctx.storage, {
       isConnected: id => this.sockets().some(socket=>this.attachment(socket)?.id===id),
       nickname: id => this.sockets().map(socket=>this.attachment(socket)).find(p=>p?.id===id)?.nickname ?? this.ctx.storage.sql.exec<{nickname:string}>('SELECT nickname FROM accounts WHERE id=?',id).toArray()[0]?.nickname ?? '도전자',
-      canEnter: id => this.games.location(id)==='office' && this.sockets().some(socket=>{const p=this.attachment(socket);return p?.id===id && p.seat===null && nearJumpPortal(p.x,p.z);}),
+      room: id => this.towerRoomOf(id),
       send: (id,packet) => {for(const socket of this.sockets())if(this.attachment(socket)?.id===id)this.send(socket,packet);},
-      awardFloors: (id,floors,now,commit) => this.games.awardExternalBatch(id,floors.map(floor=>({token:`jump-v1:floor:${floor}`,amount:floor===60?301:1})),now,commit),
+      awardFloors: (id,floors,now,commit) => this.games.awardExternalBatch(id,floors.map(floor=>({token:jumpRewardToken(floor),amount:jumpFloorReward(floor)})),now,commit),
       profile: (id,now) => this.games.profile(id,now),
       onEnter: id => {
         for(const socket of this.sockets()){const p=this.attachment(socket)!;if(p.id===id)socket.serializeAttachment({...p,seat:null,shoulder:null,avatarActionCancelled:true});}
         this.broadcast({type:'players',players:this.players()});this.publishJumpPresence(true);this.jumpSocial.joined(id);
+        // Publishing the room ranking also refreshes the room view of the members who are not climbing.
+        const roomId=this.jump.roomOf(id);if(roomId!==null)this.jumpRoomKeys.delete(roomId);this.publishJumpRooms();
       },
-      onExit: () => {this.broadcast({type:'players',players:this.players()});this.publishJumpPresence(true);},
-      motion: () => this.scheduleJumpPresence(),
-      changed: () => this.scheduleJumpRanking(),
+      // The climber is back in the room view; the lobby still lists them as a member.
+      onExit: id => {this.broadcast({type:'players',players:this.players()});this.publishJumpPresence(true);this.scheduleJumpRooms();this.games.towerPresence(id);},
+      motion: () => {this.scheduleJumpPresence();this.scheduleJumpFlush();},
+      changed: id => {this.towerBests.delete(id);this.scheduleJumpRanking();this.scheduleJumpRooms();},
     });
     this.jumpSocial=new JumpSocial(this.ctx.storage,{
-      active:id=>this.runtime.roomOpen&&this.jump.isActive(id)&&this.sockets().some(socket=>this.attachment(socket)?.id===id),
+      room:id=>this.runtime.roomOpen&&this.sockets().some(socket=>this.attachment(socket)?.id===id)?this.jump.roomOf(id):null,
       enabled:()=>this.runtime.settings.chatEnabled,
       nickname:id=>this.sockets().map(socket=>this.attachment(socket)).find(p=>p?.id===id)?.nickname??'도전자',
       send:(id,packet)=>{for(const socket of this.sockets())if(this.attachment(socket)?.id===id)this.send(socket,packet);},
-      broadcast:packet=>this.broadcastJump(packet),
+      broadcast:(packet,roomId)=>this.broadcastJump(packet,roomId),
     });
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this.ctx.waitUntil(this.syncAlarm());
   }
-  private broadcastJump(packet:unknown):void {for(const socket of this.sockets()){const id=this.attachment(socket)!.id;if(this.jump.isActive(id))this.send(socket,packet);}}
+  /** Best floor a player ever reached, for the lobby card. One indexed column, remembered until the
+   * jump authority reports a change for that player; it never builds a jump snapshot or caches a run. */
+  private towerBests=new Map<string,number>();
+  private towerBestOf(id:string):number {
+    let best=this.towerBests.get(id);
+    if(best===undefined){
+      best=Number(this.ctx.storage.sql.exec<{best_floor:number}>('SELECT best_floor FROM jump_runs WHERE id=?',id).toArray()[0]?.best_floor)||0;
+      if(this.towerBests.size>=512)this.towerBests.clear();
+      this.towerBests.set(id,best);
+    }
+    return best;
+  }
+  /** Tower room of a player, as decided by the game room lobby. Null means "not in a tower room". */
+  protected towerRoomOf(id:string):string|null {return this.games.towerRoom(id);}
+  /** Tower packets reach the members of one tower room, or everyone inside the tower when no room is given. */
+  private broadcastJump(packet:unknown,roomId?:string):void {
+    const message=JSON.stringify(packet);
+    for(const socket of this.sockets()){const room=this.jump.roomOf(this.attachment(socket)!.id);if(room!==null&&(roomId===undefined||room===roomId))this.sendRaw(socket,message);}
+  }
+  /** One serialised packet for many recipients. */
+  private sendRaw(socket:WebSocket,message:string):void {try{socket.send(message);}catch{/* Close frees the socket. */}}
+  /** While any climber has movement that is not on disk yet, check once a second for those who went quiet.
+   * A pending timer also keeps this object awake, so a paused climber's exact position (a fall
+   * included) is stored before hibernation can happen. */
+  private scheduleJumpFlush():void {
+    if(this.jumpFlushTimer!==undefined)return;
+    this.jumpFlushTimer=setTimeout(()=>{this.jumpFlushTimer=undefined;if(this.jump.flushIdle())this.scheduleJumpFlush();},1000);
+  }
   private scheduleJumpPresence():void {
     if(this.jumpPresenceTimer!==undefined)return;
     const wait=Math.max(0,JUMP_SOCIAL_RULES.presenceMs-(Date.now()-this.jumpPresenceAt));
@@ -203,16 +246,40 @@ export class Classroom extends DurableObject<Env> {
   private publishJumpPresence(force=false):void {
     if(this.jumpPresenceTimer!==undefined){clearTimeout(this.jumpPresenceTimer);this.jumpPresenceTimer=undefined;}
     const now=Date.now(),round=(value:number)=>Math.round(value*1000)/1000;
-    const peers:JumpPeerView[]=this.sockets().flatMap(socket=>{
-      const p=this.attachment(socket)!,state=this.jump.peerState(p.id,now);if(!state)return [];
-      return [{id:p.id,nickname:p.nickname,color:p.color,appearance:this.games.appearance(p.id),...state,x:round(state.x),y:round(state.y),z:round(state.z),vx:round(state.vx),vy:round(state.vy),vz:round(state.vz)}];
-    });
-    const rosterKey=JSON.stringify(peers.map(({id,nickname,color,appearance})=>({id,nickname,color,appearance})));
-    const changed:JumpPeerMotion[]=[],motions=new Map<string,string>();
-    for(const p of peers){const motion:JumpPeerMotion=[p.id,p.x,p.y,p.z,p.vx,p.vy,p.vz,p.grounded?1:0,p.floor,p.jumps],key=JSON.stringify(motion);motions.set(p.id,key);if(key!==this.jumpMotions.get(p.id))changed.push(motion);}
-    if(force||rosterKey!==this.jumpRosterKey)this.broadcastJump({type:'jump-presence',peers,serverTime:now});
-    else if(changed.length)this.broadcastJump({type:'jump-positions',players:changed,serverTime:now});
-    this.jumpRosterKey=rosterKey;this.jumpMotions=motions;this.jumpPresenceAt=now;
+    // One pass over the sockets collects each room's peers and its recipients; every packet is serialised once.
+    const rooms=new Map<string,JumpPeerView[]>(),recipients=new Map<string,WebSocket[]>();
+    for(const socket of this.sockets()){
+      const p=this.attachment(socket)!,roomId=this.jump.roomOf(p.id),state=roomId===null?null:this.jump.peerState(p.id,now);if(roomId===null||!state)continue;
+      let peers=rooms.get(roomId);if(!peers){rooms.set(roomId,peers=[]);recipients.set(roomId,[]);}
+      recipients.get(roomId)!.push(socket);
+      if(!peers.some(peer=>peer.id===p.id))peers.push({id:p.id,nickname:p.nickname,color:p.color,appearance:this.games.appearance(p.id),...state,x:round(state.x),y:round(state.y),z:round(state.z),vx:round(state.vx),vy:round(state.vy),vz:round(state.vz)});
+    }
+    const rosterKeys=new Map<string,string>(),motions=new Map<string,string>();
+    for(const [roomId,peers] of rooms){
+      const rosterKey=JSON.stringify(peers.map(({id,nickname,color,appearance})=>({id,nickname,color,appearance})));rosterKeys.set(roomId,rosterKey);
+      const changed:JumpPeerMotion[]=[];
+      for(const p of peers){const motion:JumpPeerMotion=[p.id,p.x,p.y,p.z,p.vx,p.vy,p.vz,p.grounded?1:0,p.floor,p.jumps],key=JSON.stringify(motion);motions.set(p.id,key);if(key!==this.jumpMotions.get(p.id))changed.push(motion);}
+      const packet=force||rosterKey!==this.jumpRosterKeys.get(roomId)?{type:'jump-presence',roomId,peers,serverTime:now}:changed.length?{type:'jump-positions',roomId,players:changed,serverTime:now}:null;
+      if(packet){const message=JSON.stringify(packet);for(const socket of recipients.get(roomId)!)this.sendRaw(socket,message);}
+    }
+    this.jumpRosterKeys=rosterKeys;this.jumpMotions=motions;this.jumpPresenceAt=now;
+  }
+  private scheduleJumpRooms():void {
+    if(this.jumpRoomTimer!==undefined)return;
+    const wait=Math.max(0,JUMP_SOCIAL_RULES.rankingMs-(Date.now()-this.jumpRoomSentAt));
+    if(wait===0)this.publishJumpRooms();else this.jumpRoomTimer=setTimeout(()=>this.publishJumpRooms(),wait);
+  }
+  /** Live ranking of each tower room, sent to its own members when it changes. */
+  private publishJumpRooms():void {
+    if(this.jumpRoomTimer!==undefined){clearTimeout(this.jumpRoomTimer);this.jumpRoomTimer=undefined;}
+    const now=Date.now(),keys=new Map<string,string>();
+    for(const roomId of this.jump.rooms()){
+      // The lobby room keeps each member's best floor for the whole stay, so the panel inside the tower
+      // and the room view show the same number even after someone steps out and climbs again.
+      const ranking=this.games.towerRanking(roomId,this.jump.roomRanking(roomId)),key=JSON.stringify(ranking);keys.set(roomId,key);
+      if(key!==this.jumpRoomKeys.get(roomId)){this.broadcastJump({type:'jump-room',roomId,ranking,serverTime:now},roomId);this.games.towerRoomChanged(roomId,now);}
+    }
+    this.jumpRoomKeys=keys;this.jumpRoomSentAt=now;
   }
   private scheduleJumpRanking(): void {
     if(this.jumpRankingTimer!==undefined)return;
@@ -231,7 +298,7 @@ export class Classroom extends DurableObject<Env> {
       if (!old || old.revoked || (!conceptChanged && old.layoutVersion === MAP_LAYOUT_VERSION)) continue;
       const seat = old.seat == null ? null : SEATS[old.seat];
       const point = seat ? { x: seat.x, z: seat.z } : nearestWalkable(old.x, old.z);
-      const base = conceptChanged ? { id: old.id, nickname: old.nickname, stockProfile: old.stockProfile ?? null, color: old.color, lastChat: old.lastChat, lastSeatAction: old.lastSeatAction, movementDelta: old.movementDelta, nextProposalAt: 0 } : old;
+      const base = conceptChanged ? { id: old.id, nickname: old.nickname, stockProfile: old.stockProfile ?? null, color: old.color, lastChat: old.lastChat, chatBurst: old.chatBurst, whisperBurst: old.whisperBurst, lastSeatAction: old.lastSeatAction, movementDelta: old.movementDelta, nextProposalAt: 0 } : old;
       socket.serializeAttachment({ ...base, ...point, shoulder: null, seat: seat?.id ?? null, layoutVersion: MAP_LAYOUT_VERSION, normalMoveAt: Date.now(), normalMoveCredit: 0, lastMoveAt: 0 } satisfies Attachment);
       this.send(socket, { type: 'position-correction', ...point, roundId: null, serverTime: Date.now() });
       this.send(socket, { type: 'error', code: 'LAYOUT_UPDATED', message: '사무실 배치가 바뀌었어요. 새로고침하면 넓어진 공간을 볼 수 있어요.' });
@@ -393,7 +460,7 @@ export class Classroom extends DurableObject<Env> {
       if (charts || settingsPatch) this.broadcast({ type: 'settings', settings: runtime.settings, serverTime: Date.now() });
       if (action === 'clear-chat') {
         for (const socket of this.sockets()) { const attachment = this.attachment(socket)!; const { lastChat: _lastChat, ...rest } = attachment; socket.serializeAttachment(rest); }
-        this.broadcast({ type: 'chat-clear', serverTime: Date.now() });this.jumpSocial.clear();
+        this.chatReceipts.clear(); this.broadcast({ type: 'chat-clear', serverTime: Date.now() });this.jumpSocial.clear();
       }
       if (action === 'kick' || action === 'block') {
         for (const socket of this.sockets()) {
@@ -487,14 +554,15 @@ export class Classroom extends DurableObject<Env> {
         }
         const recipientSocket = this.sockets().find(peer => this.attachment(peer)?.id === input!.to), recipient = recipientSocket ? this.attachment(recipientSocket) : null;
         if (!recipientSocket || !recipient) throw new GameError('WHISPER_OFFLINE', '상대방이 접속을 종료했어요.');
-        const retryAt = Math.max(player.nextWhisperAt ?? 0, (receipts.at(-1)?.message.sentAt ?? -WHISPER_RULES.cooldownMs) + WHISPER_RULES.cooldownMs);
-        if (now < retryAt) throw new GameError('WHISPER_COOLDOWN', '귓속말은 1초 뒤 다시 보낼 수 있어요.', retryAt);
+        // The stored receipts keep the allowance from being reset by a reconnect.
+        const burst = chatBurstTake(Math.max(player.whisperBurst ?? 0, chatBurstReplay(receipts.map(item => item.message.sentAt))), now);
+        if (!burst.ok) throw new GameError('WHISPER_COOLDOWN', '귓속말을 조금만 천천히 보내 주세요.', burst.retryAt);
         const message: WhisperMessage = { id: crypto.randomUUID(), fromId: player.id, fromNickname: player.nickname, toId: recipient.id, toNickname: recipient.nickname, text, sentAt: now };
         this.ctx.storage.transactionSync(() => {
           this.ctx.storage.sql.exec('DELETE FROM office_whisper_receipts WHERE expires_at<=?', now);
           this.ctx.storage.sql.exec('INSERT INTO office_whisper_receipts(id,receipts_json,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET receipts_json=excluded.receipts_json,expires_at=excluded.expires_at', message.fromId, JSON.stringify([...receipts, { requestId, message }].slice(-WHISPER_RULES.receiptLimit)), now + WHISPER_RECEIPT_TTL_MS);
         });
-        socket.serializeAttachment({ ...player, nextWhisperAt: now + WHISPER_RULES.cooldownMs });
+        socket.serializeAttachment({ ...player, whisperBurst: burst.fullAt });
         this.ctx.waitUntil(this.syncAlarm());
         this.send(socket, { type: 'whisper', message, requestId }); this.send(recipientSocket, { type: 'whisper', message }); return;
       }
@@ -610,9 +678,13 @@ export class Classroom extends DurableObject<Env> {
         const item = input.type === 'chat-sticker' ? shopItem(input.itemId) : undefined;
         if (input.type === 'chat-sticker' && (!item || item.category !== 'emoji' || !item.emoji || !this.games.owns(player.id, item.id))) throw new GameError('ITEM_LOCKED', '구매한 채팅 이모티콘을 선택해 주세요.');
         const requestId = socialRequestId(input.requestId), text = normalizeChat(item?.emoji ?? input.text);
-        if (player.lastChat?.requestId === requestId) { if (player.lastChat.message.text !== text) throw new GameError('REQUEST_REUSED', '이미 보낸 요청의 내용을 바꿀 수 없어요.'); this.send(socket, { type: 'chat', message: player.lastChat.message, requestId }); return; }
-        const retryAt = (player.lastChat?.message.sentAt ?? -CHAT_RULES.chatCooldownMs) + CHAT_RULES.chatCooldownMs; if (now < retryAt) throw new GameError('CHAT_COOLDOWN', '조금만 천천히 말해 주세요.', retryAt);
-        const message: ChatMessage = { id: crypto.randomUUID(), playerId: player.id, nickname: player.nickname, text, sentAt: now, expiresAt: now + CHAT_RULES.chatTtlMs }; socket.serializeAttachment({ ...player, lastChat: { requestId, message } });
+        const recent = this.chatReceipts.get(player.id) ?? [], sent = player.lastChat?.requestId === requestId ? player.lastChat : recent.find(item => item.requestId === requestId);
+        if (sent) { if (sent.message.text !== text) throw new GameError('REQUEST_REUSED', '이미 보낸 요청의 내용을 바꿀 수 없어요.'); this.send(socket, { type: 'chat', message: sent.message, requestId }); return; }
+        const burst = chatBurstTake(Math.max(player.chatBurst ?? 0, this.chatBursts.get(player.id) ?? 0), now); if (!burst.ok) throw new GameError('CHAT_COOLDOWN', '조금만 천천히 말해 주세요.', burst.retryAt);
+        const message: ChatMessage = { id: crypto.randomUUID(), playerId: player.id, nickname: player.nickname, text, sentAt: now, expiresAt: now + CHAT_RULES.chatTtlMs }; socket.serializeAttachment({ ...player, lastChat: { requestId, message }, chatBurst: burst.fullAt });
+        // A full bucket and an expired bubble need no memory, so both maps stay as small as the room is busy.
+        if (this.chatBursts.size >= 256) for (const [id, fullAt] of this.chatBursts) if (fullAt <= now) { this.chatBursts.delete(id); this.chatReceipts.delete(id); }
+        this.chatBursts.set(player.id, burst.fullAt); this.chatReceipts.set(player.id, [...recent, { requestId, message }].slice(-CHAT_BURST.capacity));
         for(const peer of this.sockets())if(!this.jump.isActive(this.attachment(peer)!.id))this.send(peer,{type:'chat',message,requestId});return;
       }
       if (input.type === 'refreshments') {

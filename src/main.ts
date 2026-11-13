@@ -29,6 +29,7 @@ import { createGameHubUI } from './game-hub-ui';
 import { createWhisperUI } from './whisper-ui';
 import { createStickerUI } from './sticker-ui';
 import { defaultAvatarProfile, type AvatarProfile } from '../shared/avatar-catalog';
+import { JUMP_RULES, JUMP_ZONES } from '../shared/jump-game';
 
 const icons: Record<string, string> = {
   chart: '<path d="M4 3v17h17M7 15l4-5 4 3 5-7"/>',
@@ -66,7 +67,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div id="render-error" class="render-error" hidden>3D 화면을 열 수 없어요. WebGL을 지원하는 브라우저에서 다시 열어 주세요. 차트 확대는 계속 이용할 수 있어요.</div>
   </main>
   <dialog id="chart-dialog" class="modal chart-dialog" aria-labelledby="chart-dialog-title"><div class="modal-header"><div><span class="eyebrow">THE SHARED MARKET SCREEN</span><h2 id="chart-dialog-title">함께 보는 시장</h2></div><button class="tool-button close-modal" aria-label="차트 닫기">${icon('close')}</button></div><div id="large-chart-host"></div><p class="chart-footnote">공유 종목과 분봉은 관리자만 변경합니다. 각 차트는 확대해서 볼 수 있어요. 주식·ETF 시세는 지연되거나 표시가 제한될 수 있어요.</p></dialog>
-  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-header"><div><span class="eyebrow">WELCOME TO PODEUM SECURITIES</span><h2 id="help-title">포듬증권 이용 안내</h2></div><button class="tool-button close-modal" aria-label="안내 닫기">${icon('close')}</button></div><ol class="office-rules"><li><b>같은 차트, 다른 관점</b><p>최대 50명이 앞뒤 벽에 네 개씩 놓인 여덟 종목의 차트를 함께 봅니다. 정면은 삼성전자·SK하이닉스·TQQQ·SOXL, 후면은 비트코인·이더리움·리플·테더의 1분봉으로 시작하고, 각 칸의 ↗ 버튼으로 하나만 크게 볼 수 있어요. 모바일 차트 탭에서는 위의 종목 이름을 눌러 한 종목씩 넓게 볼 수 있어요. 닉네임만 정하면 무료로 입장할 수 있어요.</p></li><li><b>관리자가 정하는 공유 차트</b><p id="help-chart-policy">종목과 분봉은 관리자만 변경할 수 있어요. 참가자는 여덟 차트 중 원하는 차트를 선택해서 확대할 수 있습니다. 사무실에 50명이 접속 중이면 새 참가자는 포듬 시세 페이지로 자동 연결됩니다.</p></li><li><b>실제 시장 데이터</b><p id="help-chart-data">코인·미국 주식·ETF는 TradingView 차트입니다. 국내 주식은 Vunelix 연결을 준비 중이며, 연결 상태는 차트에서 확인할 수 있어요. 바이낸스 암호화폐 시세는 실시간이며 주식·ETF는 지연되거나 표시가 제한될 수 있어요. 차트의 데이터 안내를 확인하세요.</p></li><li><b>대화와 자리 선택</b><p>Enter 또는 모바일의 채팅 버튼을 눌러 80자까지 대화하세요. 모바일 입력창은 메시지를 보낸 뒤 접히며, 사무실 화면에서는 최근 대화만 작게 표시됩니다. 말풍선은 머리 위에 8초 동안 표시됩니다. 빈 소파·의자나 채팅창의 좌석 선택으로 앉고, 이동 키나 일어나기로 다시 걸을 수 있어요.</p></li><li><b>내가 편한 시점으로</b><p>벽과 천장이 있는 사무실 안에서 자유롭게 둘러보세요. 카메라와 캐릭터는 실내 범위 안에서만 이동합니다. 드래그로 회전, 오른쪽 버튼·Shift 드래그로 화면 이동, 휠로 확대·축소하세요. 두 손가락으로도 화면 이동과 확대가 가능해요. 위 보기·아래 보기로 고개 각도를 조절하고, 차트 보기로 벽을 정면에서 보세요. 내 캐릭터 버튼은 편한 기본 각도로 돌아와 따라가기를 켭니다. 화면을 옮기면 따라가기가 해제됩니다. 바닥 클릭·WASD·방향키는 캐릭터 이동입니다. 모바일에서는 왼쪽 아래 방향 버튼을 누르고 있으면 걷고, 화면 드래그로 둘러봅니다. 오른쪽 내 캐릭터 버튼으로 시점을 복구할 수 있어요.</p></li></ol><p class="data-note">함께 시장을 보는 소셜 공간입니다. 이곳에서 실제 주문이나 결제는 이루어지지 않아요.</p></dialog>
+  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-header"><div><span class="eyebrow">WELCOME TO PODEUM SECURITIES</span><h2 id="help-title">포듬증권 이용 안내</h2></div><button class="tool-button close-modal" aria-label="안내 닫기">${icon('close')}</button></div><ol class="office-rules"><li><b>같은 차트, 다른 관점</b><p>최대 50명이 앞뒤 벽에 네 개씩 놓인 여덟 종목의 차트를 함께 봅니다. 정면은 삼성전자·SK하이닉스·TQQQ·SOXL, 후면은 비트코인·이더리움·리플·테더의 1분봉으로 시작하고, 각 칸의 ↗ 버튼으로 하나만 크게 볼 수 있어요. 모바일 차트 탭에서는 위의 종목 이름을 눌러 한 종목씩 넓게 볼 수 있어요. 닉네임만 정하면 무료로 입장할 수 있어요.</p></li><li><b>관리자가 정하는 공유 차트</b><p id="help-chart-policy">종목과 분봉은 관리자만 변경할 수 있어요. 참가자는 여덟 차트 중 원하는 차트를 선택해서 확대할 수 있습니다. 사무실에 50명이 접속 중이면 새 참가자는 포듬 시세 페이지로 자동 연결됩니다.</p></li><li><b>실제 시장 데이터</b><p id="help-chart-data">코인·미국 주식·ETF는 TradingView 차트입니다. 국내 주식은 Vunelix 연결을 준비 중이며, 연결 상태는 차트에서 확인할 수 있어요. 바이낸스 암호화폐 시세는 실시간이며 주식·ETF는 지연되거나 표시가 제한될 수 있어요. 차트의 데이터 안내를 확인하세요.</p></li><li><b>대화와 자리 선택</b><p>Enter 또는 모바일의 채팅 버튼을 눌러 80자까지 대화하세요. 모바일 입력창은 메시지를 보낸 뒤 접히며, 사무실 화면에서는 최근 대화만 작게 표시됩니다. 말풍선은 머리 위에 8초 동안 표시됩니다. 빈 소파·의자나 채팅창의 좌석 선택으로 앉고, 이동 키나 일어나기로 다시 걸을 수 있어요.</p></li><li><b>내가 편한 시점으로</b><p>벽과 천장이 있는 사무실 안에서 자유롭게 둘러보세요. 카메라와 캐릭터는 실내 범위 안에서만 이동합니다. 드래그로 회전, 오른쪽 버튼·Shift 드래그로 화면 이동, 휠로 확대·축소하세요. 두 손가락으로도 화면 이동과 확대가 가능해요. 위 보기·아래 보기로 고개 각도를 조절하고, 차트 보기로 벽을 정면에서 보세요. 내 캐릭터 버튼은 편한 기본 각도로 돌아와 따라가기를 켭니다. 화면을 옮기면 따라가기가 해제됩니다. 바닥 클릭·WASD·방향키는 캐릭터 이동입니다. 모바일에서는 왼쪽 아래 조이스틱을 밀면 걷고, 화면 드래그로 둘러봅니다. 오른쪽 내 캐릭터 버튼으로 시점을 복구할 수 있어요.</p></li></ol><p class="data-note">함께 시장을 보는 소셜 공간입니다. 이곳에서 실제 주문이나 결제는 이루어지지 않아요.</p></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 `;
 
@@ -136,19 +137,22 @@ const avatarActions = createAvatarActionsUI({
   notify: toast,
 });
 function beforePrivatePanel() { social.closeComposer(); scene?.pauseMovement(); }
-const whispers = createWhisperUI({send: (to, text, requestId) => send({type:'whisper',to,text,requestId}), notify:toast, beforeOpen:beforePrivatePanel,onUnread:count=>gameHub?.setWhisperUnread(count)});
+const whispers = createWhisperUI({send: (to, text, requestId) => send({type:'whisper',to,text,requestId}), now:()=>Date.now()+serverOffset, notify:toast, beforeOpen:beforePrivatePanel,onUnread:count=>gameHub?.setWhisperUnread(count)});
 const studio = createAvatarCustomizer({onSaved:applyAvatarProfile,notify:toast,onShop:()=>gameHub?.openShop(),beforeOpen:beforePrivatePanel});
-const stickers = createStickerUI({send:(itemId,requestId)=>send({type:'chat-sticker',itemId,requestId}),notify:toast,onShop:()=>gameHub?.openShop(),beforeOpen:beforePrivatePanel});
+const stickers = createStickerUI({send:(itemId,requestId)=>send({type:'chat-sticker',itemId,requestId}),notify:toast,onShop:()=>gameHub?.openShop(),beforeOpen:beforePrivatePanel,burst:social.chatBurst});
 function applyAvatarProfile(value:AvatarProfile) { avatarProfile=value; studio.setProfile(value); avatarActions.setOwned(value.owned); stickers.setOwned(value.owned); gameHub?.setProfile(value); jumpGame?.setProfile(value); }
 el('join-form').querySelector('.stock-profile-fields')!.before(studio.button);
 gameHub = createGameHubUI({send, now:()=>Date.now()+serverOffset,
   onOpen(){ beforePrivatePanel(); document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach(dialog=>dialog.close()); el('app').inert=true; scene?.stopMovement(); scene?.setRenderingActive(false); updateMobileMovement(); },
   onExit(){ el('app').inert=false; updateChartPlacement(); },
   onAppearance:selection=>void studio.open(selection),onWhisper:id=>whispers.open(id),onNotify:toast,onProfile:applyAvatarProfile,
+  // 점프 타워 is played from its room in the game room: the hub stays open underneath.
+  onTower(){jumpGame?.open();},
 });
 jumpGame=createJumpGameUI({send,now:()=>Date.now()+serverOffset,
-  onOpen(){beforePrivatePanel();document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach(dialog=>dialog.close());el('app').inert=true;scene?.pauseMovement();scene?.setRenderingActive(false);updateMobileMovement();},
-  onExit(){el('app').inert=false;scene?.cancelSeatAction();updateChartPlacement();},
+  onOpen(){beforePrivatePanel();document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach(dialog=>dialog.close());el('app').inert=true;gameHub?.setCovered(true);scene?.pauseMovement();scene?.setRenderingActive(false);updateMobileMovement();},
+  // Leaving the tower lands in the tower room of the game room; the office stays inert while the hub is open.
+  onExit(){gameHub?.setCovered(false);el('app').inert=!!gameHub?.isOpen();scene?.cancelSeatAction();updateChartPlacement();},
   onProfile:applyAvatarProfile,onNotify:toast,
 });
 const extraTools=document.createElement('div');extraTools.className='podeum-extra-tools';
@@ -169,12 +173,13 @@ try {
     onFollowChange(enabled) { el('free-view').setAttribute('aria-pressed', String(!enabled)); el('reset-view').setAttribute('aria-pressed', String(enabled)); },
     onCommunityPost(postId) { window.open(postId ? `/markets?post=${encodeURIComponent(postId)}` : '/markets?view=community', '_blank', 'noopener'); },
     onRefreshments() { refreshments.open(); },
-    onJumpPortal() { jumpGame?.open(); },
+    // The door beside the snack bar is the entrance of the game room.
+    onJumpPortal() { gameHub?.open(); },
   });
 } catch (error) { console.error(error); el('render-error').hidden = false; }
 function returnToCharacter() { scene?.resetView(); view = 'room'; updateViewLabel(); }
 mobileMovement = createMobileMovement({
-  onMove(direction, pressed) { scene?.setMoveInput(direction, pressed); },
+  onMove(x, z) { scene?.setMoveStick(x, z); },
   onResetView: returnToCharacter,
 });
 function updateMobileMovement() {
@@ -200,12 +205,12 @@ refreshmentsButton.onclick = () => {
   mobileShell?.setView('office'); scene.approachRefreshments(); view = 'room'; updateViewLabel();
 };
 communityButton.after(refreshmentsButton);
-const jumpButton=document.createElement('button');jumpButton.id='jump-tower-button';jumpButton.type='button';jumpButton.className='tool-button view-preset';jumpButton.textContent='↟ 점프 타워';
+const jumpButton=document.createElement('button');jumpButton.id='jump-tower-button';jumpButton.type='button';jumpButton.className='tool-button view-preset';jumpButton.textContent='🚪 게임룸 입구';jumpButton.setAttribute('aria-label','스낵바 옆 게임룸 입구로 걸어가기');jumpButton.title='스낵바 옆 문으로 걸어가 게임룸에 들어가요';
 jumpButton.onclick=()=>{if(!me||socket?.readyState!==WebSocket.OPEN){toast('먼저 사무실에 입장해 주세요.');mobileShell?.openAdmission();return;}social.closeComposer();document.querySelectorAll<HTMLDialogElement>('dialog[open]').forEach(dialog=>dialog.close());mobileShell?.setView('office');scene?.approachJumpPortal();};
 refreshmentsButton.after(jumpButton);
 const jumpPanelButton=jumpButton.cloneNode(true) as HTMLButtonElement;jumpPanelButton.id='jump-tower-panel-button';jumpPanelButton.onclick=jumpButton.onclick;extraTools.prepend(jumpPanelButton);
 let jumpLeaderboardKey='';
-function setJumpLeaderboard(leaders:JumpLeaderView[]){const key=JSON.stringify(leaders);if(key===jumpLeaderboardKey)return;jumpLeaderboardKey=key;scene?.setJumpLeaderboard(leaders);jumpGame?.setLeaderboard(leaders);}
+function setJumpLeaderboard(leaders:JumpLeaderView[]){const key=JSON.stringify(leaders);if(key===jumpLeaderboardKey)return;jumpLeaderboardKey=key;scene?.setJumpLeaderboard(leaders);jumpGame?.setLeaderboard(leaders);gameHub?.setTowerLeaders(leaders);}
 let rankingFetchedAt=0;
 async function refreshJumpLeaderboard(){if(document.hidden||Date.now()-rankingFetchedAt<60000)return;rankingFetchedAt=Date.now();try{const response=await fetch('/api/jump/leaderboard');if(!response.ok)return;const data=await response.json();if(Array.isArray(data.leaders))setJumpLeaderboard(data.leaders);}catch{/* Keep the last readable sign when offline. */}}
 void refreshJumpLeaderboard();document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshJumpLeaderboard();});
@@ -237,8 +242,11 @@ const profileHelp = document.createElement('li');
 profileHelp.innerHTML = '<b>종목과 평단, 나만의 반응</b><p>입장할 때 종목·평단 표시를 열어 원하는 종목과 원화·달러 평단을 함께 입력하면 닉네임 위에 표시돼요. 두 칸을 비우면 표시하지 않습니다. 액션 메뉴의 가즈아!·살려주세요!는 앉아서도 사용할 수 있어요. 오른쪽 차트·안내는 접기 버튼으로 최소화할 수 있습니다.</p>';
 el('help-dialog').querySelector('.office-rules')!.append(profileHelp);
 const jumpHelp=document.createElement('li');
-jumpHelp.innerHTML='<b>스낵바 옆 점프 타워</b><p>↟ 점프 타워 버튼을 누르면 스낵바 옆 문으로 걸어갑니다. 문을 지나면 60층 점프 게임장이 열려요. WASD·방향키 또는 모바일 방향 버튼으로 이동하고, Space·점프 버튼을 공중에서 한 번 더 눌러 2단 점프하세요. 가시·회전 막대·밀대에 닿으면 튕겨 나가며 공중 점프로 회복할 수 있어요. 컨베이어·얼음·점멸·붕괴·바람 발판도 기다립니다. 추락하면 10층마다 저장된 재시작 지점으로 돌아갑니다. 각 층 최초 도달 1PT, 정상 최초 도달 추가 300PT로 캐릭터당 최대 360PT를 받아 의상·액세서리 상점에서 사용할 수 있어요. 전광판은 최고 도달 층 상위 3명이며, 동점이면 먼저 도달한 순서입니다.</p>';
+jumpHelp.innerHTML=`<b>스낵바 옆 문은 게임룸 입구</b><p>🚪 게임룸 입구 버튼을 누르면 스낵바 옆 문으로 걸어가고, 문을 지나면 게임룸이 열려요. ♟ 게임룸 버튼으로 바로 들어가도 같은 곳입니다. 게임룸에서는 게임을 종류별로 고를 수 있어요. 전략 게임(블라인드 옥션·두 팀의 금고·시그널 코드)과 액션 게임(점프 타워) 모두 방을 만들거나 열린 방에 참가해서 즐깁니다.</p>`;
 el('help-dialog').querySelector('.office-rules')!.append(jumpHelp);
+const towerHelp=document.createElement('li');
+towerHelp.innerHTML=`<b>액션 게임 · 점프 타워 ${JUMP_RULES.floors}층</b><p>게임룸의 액션 게임에서 점프 타워 방을 만들거나 참가한 뒤 타워 입장을 누르세요. 준비 확인이나 라운드가 없고, 같은 방 사람들끼리만 타워 안에서 서로 보이고 대화하며 실시간 순위를 겨룹니다. WASD·방향키 또는 모바일 조이스틱으로 이동하고, Space·점프 버튼을 공중에서 한 번 더 눌러 2단 점프하세요. 타워는 10층씩 열 개의 구역(${JUMP_ZONES.map(zone=>zone.name).join(' · ')})으로 이어지고 구역마다 오르는 방향과 장치가 달라요. 가시·회전 막대·밀대·망치·레이저·톱날·대포·화염에 닿으면 튕겨 나가며 공중 점프로 회복할 수 있어요. 체크포인트는 없어요. 아래 발판에 내려앉으면 거기서 이어 가고, 허공으로 떨어지면 1층부터 다시 시작합니다. 각 층 최초 도달 ${JUMP_RULES.floorReward}PT(${JUMP_RULES.floors}층까지 ${JUMP_RULES.floors*JUMP_RULES.floorReward}PT), ${JUMP_RULES.floors}층 최초 도달 보너스 ${JUMP_RULES.summitReward}PT로 캐릭터당 최대 ${JUMP_RULES.maxRewardPoints}PT를 받아 의상·액세서리 상점에서 사용할 수 있어요. 타워에서 나가면 방으로, 방에서 나가면 게임룸 로비로, 게임룸에서 나가면 사무실로 돌아옵니다. 문 옆 전광판은 전체 최고 도달 층 상위 3명이며, 동점이면 먼저 도달한 순서입니다.</p>`;
+el('help-dialog').querySelector('.office-rules')!.append(towerHelp);
 // Keep a connected parking host even if WebGL is unavailable, so the same chart
 // can still be moved into the accessible enlarged dialog.
 const fallbackHost = document.createElement('div');
@@ -394,7 +402,7 @@ function updatePlayers() {
     badge.title=player.id===me?.id?'내 캐릭터 꾸미기':`${player.nickname}님에게 귓속말`;
     badge.onclick=()=>{if(player.id===me?.id)void studio.open();else whispers.open(player.id);};
     const dot = document.createElement('i'); dot.style.backgroundColor = `#${player.color.toString(16).padStart(6, '0')}`;
-    badge.append(dot, document.createTextNode(player.nickname + (player.id === me?.id ? ' · 나' : '')+(player.area==='games'?' · 게임룸':player.area==='jump'?' · 점프 타워':''))); list.append(badge);
+    badge.append(dot, document.createTextNode(player.nickname + (player.id === me?.id ? ' · 나' : '')+(player.area==='games'?' · 게임룸':player.area==='jump'?' · 게임룸 · 점프 타워':''))); list.append(badge);
   }
   if (!players.length) list.append(Object.assign(document.createElement('small'), { textContent: '첫 번째 자리가 비어 있어요.' }));
 }
@@ -477,7 +485,7 @@ async function connect(nickname: string, reconnecting = false) {
         toast(reconnecting ? '다시 연결됐어요.' : `${me.nickname}님, 포듬증권에 오신 것을 환영해요.`);
       } else if (data.type === 'game-state') { if(Number.isFinite(data.state?.serverTime))serverOffset=data.state.serverTime-Date.now(); gameHub?.receive(data); updateMobileMovement(); }
       else if(data.type==='jump-state'){jumpGame?.receive(data);if(Array.isArray(data.state?.leaderboard))setJumpLeaderboard(data.state.leaderboard);updateMobileMovement();}
-      else if(['jump-presence','jump-positions','jump-chat','jump-chat-history','jump-chat-clear'].includes(data.type)){jumpGame?.receive(data);}
+      else if(['jump-presence','jump-positions','jump-room','jump-chat','jump-chat-history','jump-chat-clear'].includes(data.type)){jumpGame?.receive(data);}
       else if(data.type==='jump-leaderboard'){if(Array.isArray(data.leaders))setJumpLeaderboard(data.leaders);}
       else if (data.type === 'avatar-profile') { if(data.profile)applyAvatarProfile(data.profile); }
       else if (data.type === 'whisper') whispers.receive(data.message,data.requestId);
@@ -520,8 +528,8 @@ async function connect(nickname: string, reconnecting = false) {
         const message = data.message || '잠시 후 다시 시도해 주세요.';
         if(jumpGame?.receive(data))return;
         if(gameHub?.receive(data))return;
-        if(whispers.error(data.requestId,message))return;
-        if(stickers.error(data.requestId,message))return;
+        if(whispers.error(data.requestId,message,data.retryAt))return;
+        if(stickers.error(data.requestId,message,data.retryAt))return;
         if (avatarActions.error(data.requestId, message, data.retryAt)) return;
         if (refreshments.error(data.requestId, message, data.retryAt)) return;
         if (social.error(data.requestId, message, data.retryAt)) return;

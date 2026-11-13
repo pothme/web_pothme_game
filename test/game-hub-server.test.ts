@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createHarness} from './harness.mjs';
 import {identity,join,observe,origin,login,admin,type Message} from './office-helpers';
 import {DEFAULT_APPEARANCE} from '../shared/avatar-appearance';
+import {CHAT_BURST} from '../shared/chat-burst';
 
 test('whispers authenticate both names, reach only the two peers, deduplicate and stay out of public history', {timeout:30_000},async()=>{
  const {mf,room}=await createHarness();try{
@@ -14,7 +15,9 @@ test('whispers authenticate both names, reach only the two peers, deduplicate an
   assert.equal(c.messages.some(m=>m.type==='whisper'||m.type==='chat'||m.type==='action-notice'),false);
   a.send(input);assert.equal((await a.wait(m=>m.type==='whisper')).message.id,own.message.id);assert.equal(b.messages.some(m=>m.type==='whisper'),false);
   a.send({...input,text:'바뀐 내용'});assert.equal((await a.wait(m=>m.requestId===input.requestId)).code,'REQUEST_REUSED');
-  a.send({...input,requestId:'whisper-fast'});assert.equal((await a.wait(m=>m.requestId==='whisper-fast')).code,'WHISPER_COOLDOWN');
+  // A burst of five goes straight through (the replay above cost nothing); the sixth names the time of the next token.
+  for(let index=0;index<4;index++){const requestId=`whisper-burst-${index}`;a.send({...input,text:`연속 ${index}`,requestId});assert.equal((await a.wait(m=>m.requestId===requestId)).type,'whisper');assert.equal((await b.wait(m=>m.type==='whisper')).message.text,`연속 ${index}`);}
+  a.send({...input,requestId:'whisper-fast'});const limited=await a.wait(m=>m.requestId==='whisper-fast');assert.equal(limited.code,'WHISPER_COOLDOWN');assert.equal(limited.retryAt,own.message.sentAt+CHAT_BURST.refillMs);
   a.send({...input,to:a.welcome.me.id,requestId:'whisper-self'});assert.equal((await a.wait(m=>m.requestId==='whisper-self')).code,'WHISPER_RECIPIENT');
   await room.testClock(own.message.sentAt+1100,false);
   a.send({...input,to:'0'.repeat(64),requestId:'whisper-missing'});assert.equal((await a.wait(m=>m.requestId==='whisper-missing')).code,'WHISPER_OFFLINE');
@@ -98,5 +101,76 @@ test('game tables integrate with room presence, private choices, shared alarms a
   await room.testClock(state.room.deadline);const revealed=await cmd(b,'game-enter');assert.equal(revealed.room.phase,'reveal');assert.equal(revealed.room.players.find((p:Message)=>p.id===a.welcome.me.id).chips,14);
   const auth=await login(mf);const closed=await admin(mf,'control',{action:'close'},auth.cookie,auth.csrf);assert.equal(closed.status,200);assert.equal((await room.testSnapshot()).alarmAt,null);
   const body=await closed.json() as Message;assert.equal(body.roomOpen,false);
+ }finally{await mf.dispose();}
+});
+
+test('the game room is the way into the tower: lobby, tower room, tower and back keep one consistent area', {timeout:60_000},async()=>{
+ const {mf,room}=await createHarness();try{
+  const cookieA=await identity(mf),cookieB=await identity(mf);
+  let a=await join(mf,cookieA,'타워방장'),b=await join(mf,cookieB,'타워친구');const office=await join(mf,await identity(mf),'사무실손님');let request=0;
+  const idA=a.welcome.me.id,idB=b.welcome.me.id;
+  const ask=async(peer:typeof a,type:string,extra:Record<string,unknown>={})=>{const requestId=`door-command-${++request}`;peer.send({type,requestId,...extra});return peer.wait(m=>m.requestId===requestId&&['game-state','jump-state','error'].includes(m.type));};
+  const game=async(peer:typeof a,type:string,extra:Record<string,unknown>={})=>{const response=await ask(peer,type,extra);assert.equal(response.type,'game-state',JSON.stringify(response));return response.state;};
+  const climb=async(peer:typeof a,type:string,extra:Record<string,unknown>={})=>{const response=await ask(peer,type,extra);assert.equal(response.type,'jump-state',JSON.stringify(response));return response.state;};
+  const area=async(id:string)=>((await room.testSnapshot()).players.find(player=>player.id===id) as any)?.area;
+  assert.equal(a.welcome.me.area,'office');
+
+  // The lobby alone is not enough: no tower without a tower room. A strategy table does not count either.
+  // The socket allows a short burst of commands; a real player is never this fast.
+  const breathe=()=>new Promise(resolve=>setTimeout(resolve,1300));
+  let lobby=await game(a,'game-enter');assert.equal(lobby.area,'games');assert.equal(lobby.room,null);assert.equal(lobby.towerBest,0);assert.equal(await area(idA),'games');
+  assert.equal((await ask(a,'jump-enter')).code,'JUMP_ROOM');
+  await game(a,'game-create',{kind:'blind-auction'});
+  assert.equal((await ask(a,'jump-enter')).code,'JUMP_ROOM','a strategy table is not a tower room');
+  assert.equal((await ask(a,'game-create',{kind:'jump-tower'})).code,'GAME_ROOM','one room at a time');
+  await game(a,'game-leave');
+
+  // Create and join a tower room from the lobby list.
+  const created=await game(a,'game-create',{kind:'jump-tower'}),roomId=created.room.id;
+  assert.equal(created.room.kind,'jump-tower');assert.equal(created.room.players[0].floor,null);
+  lobby=await game(b,'game-enter');
+  assert.deepEqual(lobby.rooms.map((row:Message)=>[row.id,row.kind,row.hostName,row.count,row.maxPlayers]),[[roomId,'jump-tower','타워방장',1,12]]);
+  await game(b,'game-join',{roomId});
+
+  // Into the tower: the member stays in the room, the area becomes 'jump' and lobby commands wait.
+  await breathe();let run=await climb(a,'jump-enter');assert.equal(run.active,true);assert.equal(run.roomId,roomId);assert.equal(run.state.floor,0);
+  assert.equal(await area(idA),'jump');assert.equal(await area(idB),'games');
+  const watching=await b.wait(m=>m.type==='game-state'&&m.state.room?.players.some((player:Message)=>player.id===idA&&player.floor===0));
+  assert.equal(watching.state.room.players.find((player:Message)=>player.id===idB).floor,null,'the room view tells who is climbing');
+  for(const type of ['game-leave','game-exit','game-chat','game-create'])assert.equal((await ask(a,type,{kind:'jump-tower',text:'안녕'})).code,'JUMP_AREA',type);
+  assert.equal((await room.testGames(idA)).room?.id,roomId,'refused commands leave the room untouched');
+
+  // Others may enter while the tower is running; only the room hears about it.
+  a.messages.length=0;const second=await climb(b,'jump-enter');assert.equal(second.roomId,roomId);
+  const presence=await a.wait(m=>m.type==='jump-presence'&&m.peers.length===2);assert.equal(presence.roomId,roomId);
+  const ranking=await a.wait(m=>m.type==='jump-room'&&m.ranking.length===2);assert.equal(ranking.roomId,roomId);
+  assert.equal(office.messages.some(m=>m.type.startsWith('jump-')&&m.type!=='jump-leaderboard'||m.type==='game-state'&&m.state.room),false,'the office never receives room traffic');
+
+  // Out of the tower lands in the room view, still a member.
+  await breathe();a.messages.length=0;run=await climb(a,'jump-exit',{runId:run.runId});assert.equal(run.active,false);assert.equal(run.roomId,null);
+  assert.equal(await area(idA),'games');
+  const back=await a.wait(m=>m.type==='game-state'&&m.state.room?.id===roomId);
+  assert.equal(back.state.area,'games');assert.equal(back.state.room.players.find((player:Message)=>player.id===idA).floor,null);assert.equal(back.state.room.players.find((player:Message)=>player.id===idB).floor,0);
+
+  // A member who drops keeps the seat for a minute; then the climb ends with the membership.
+  b.socket.close(1000,'lost');await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal((await game(a,'game-enter')).room.players.find((player:Message)=>player.id===idB).connected,false);
+  await room.testClock(Date.now()+61_000);
+  assert.deepEqual((await game(a,'game-enter')).room.players.map((player:Message)=>player.id),[idA]);
+  b=await join(mf,cookieB,'타워친구');assert.equal(b.welcome.me.area,'office','the climb ended when the seat was given up');
+  assert.equal((await ask(b,'jump-enter')).code,'JUMP_ROOM');
+
+  // Room -> lobby (the empty room closes) -> office.
+  lobby=await game(a,'game-leave');assert.equal(lobby.room,null);assert.deepEqual(lobby.rooms,[]);assert.equal(await area(idA),'games');
+  lobby=await game(a,'game-exit');assert.equal(lobby.area,'office');assert.equal(await area(idA),'office');
+
+  // Reconnecting while inside the tower restores both layers: the room underneath and the climb on top.
+  const again=await game(a,'game-create',{kind:'jump-tower'});run=await climb(a,'jump-enter');assert.equal(run.roomId,again.room.id);
+  a=await join(mf,cookieA,'타워방장');assert.equal(a.welcome.me.area,'jump');
+  const restoredRoom=await a.wait(m=>m.type==='game-state');assert.equal(restoredRoom.state.area,'games');assert.equal(restoredRoom.state.room.id,again.room.id);assert.equal(typeof restoredRoom.state.room.players[0].floor,'number');
+  const restoredRun=await a.wait(m=>m.type==='jump-state');assert.equal(restoredRun.state.active,true);assert.equal(restoredRun.state.roomId,again.room.id);
+  run=await climb(a,'jump-exit',{runId:restoredRun.state.runId});assert.equal(run.active,false);
+  lobby=await game(a,'game-exit');assert.equal(lobby.area,'office');assert.equal(lobby.room,null);assert.deepEqual(lobby.rooms,[]);
+  assert.equal(await area(idA),'office');assert.equal((await ask(a,'jump-enter')).code,'JUMP_ROOM');
  }finally{await mf.dispose();}
 });

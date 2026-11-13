@@ -8,7 +8,7 @@ test('remote jump movement interpolates between server samples and rejects reord
   assert.strictEqual(updateJumpMotion(track,sample(-4,1100)),track);
   assert.equal(sampleJumpMotion(track,1320).x,1);
 });
-test('remote jump extrapolation is capped and checkpoint teleports do not slide through floors',()=>{
+test('remote jump extrapolation is capped and restart teleports do not slide through floors',()=>{
   let track=updateJumpMotion(undefined,sample(0,1000));track=updateJumpMotion(track,sample(1,1200));
   assert.equal(sampleJumpMotion(track,9000).x,1.5);
   track=updateJumpMotion(track,{...sample(2,1400),y:25,floor:20});
